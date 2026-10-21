@@ -118,7 +118,14 @@ var CSS = [
 '.k-warn{background:rgba(255,193,7,.16);color:#c08a00}',
 '.k-info{background:rgba(33,150,243,.14);color:#1e88e5}',
 '.k-boot,.k-flush{background:rgba(130,130,130,.14);color:#999}',
-'.wansel-muted{color:var(--text-color-medium,#888);font-size:13px}'
+'.wansel-muted{color:var(--text-color-medium,#888);font-size:13px}',
+
+'.wansel-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;',
+'padding:14px 4px 2px;font-size:12px;color:var(--text-color-medium,#999);',
+'border-top:1px solid var(--border-color-low,#e6e6e6);margin-top:6px;flex-wrap:wrap}',
+'.wansel-footer a{color:#2fb344;text-decoration:none}',
+'.wansel-footer a:hover{text-decoration:underline}',
+'.wansel-dark .wansel-footer{border-color:#333}'
 ].join('');
 
 function clear(el) {
@@ -208,6 +215,9 @@ return view.extend({
 		this.root.appendChild(this.configEl);
 		this.root.appendChild(this.eventsEl);
 
+		this.footerEl = E('div', { 'class': 'wansel-footer' });
+		this.root.appendChild(this.footerEl);
+
 		this.state = st;
 		this.paint();
 
@@ -233,6 +243,20 @@ return view.extend({
 		this.paintTraffic(st);
 		this.paintConfig(st);
 		this.paintEvents(st);
+		this.paintFooter(st);
+	},
+
+	// ---------- 页脚：版本号 + 仓库链接 ----------
+	paintFooter: function(st) {
+		clear(this.footerEl);
+		this.footerEl.appendChild(E('span', {}, [
+			'luci-app-wans-switch v' + (st.version || '?')
+		]));
+		this.footerEl.appendChild(E('a', {
+			'href': st.repo || 'https://github.com/MURChen/luci-app-wans-switch',
+			'target': '_blank',
+			'rel': 'noopener'
+		}, ['GitHub · MURChen/luci-app-wans-switch']));
 	},
 
 	// ---------- 清理连接跟踪 ----------

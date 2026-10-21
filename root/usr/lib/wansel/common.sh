@@ -17,6 +17,9 @@ SETTINGS_DIR="/etc/wansel"
 SETTINGS_FILE="$SETTINGS_DIR/settings"  # 持久设置
 TRAFFIC_FILE="$SETTINGS_DIR/traffic"    # 5G 流量累计（持久）
 
+WANSEL_VERSION="1.1"
+WANSEL_REPO="https://github.com/MURChen/luci-app-wans-switch"
+
 OVERRIDE_METRIC=0
 PROBE_NET="223.5.5.5"
 CACHE_TTL=5
@@ -477,6 +480,8 @@ build_status_json() {
 {
   "active": "$active",
   "auto": $auto,
+  "version": "$WANSEL_VERSION",
+  "repo": "$WANSEL_REPO",
   "flush_on_switch": $(num_setting flush_on_switch 1),
   "lan_cidr": "$(json_esc "$(lan_cidr)")",
   "has_conntrack": $(command -v conntrack >/dev/null 2>&1 && echo 1 || echo 0),
