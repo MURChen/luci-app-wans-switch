@@ -2,10 +2,11 @@
 
 在 OpenWrt 上快速切换默认出口：**宽带（WAN）** ↔ **安卓 USB 共享（RNDIS）**。
 
-为「5G 快但有延迟、宽带低延迟但带宽小」这类场景设计：平时走宽带，下载或宽带故障时一键切到手机流量。适配 OpenClash（redir-host 模式），切换出口不影响代理链路。
+一键切换路由器出口：宽带 ↔ 手机 / CPE 流量随需切换。
 
 > A LuCI app for OpenWrt that switches the default route between WAN and Android USB tethering, with configurable failover, latency probing, traffic accounting and conntrack management.
 
+> 由 **DeepSeek-Flash** 辅助开发。
 ---
 
 ## 功能
