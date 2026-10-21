@@ -18,8 +18,8 @@ cp -r "$BASE/root/." /
 
 chmod 755 /usr/sbin/wansel /usr/sbin/wansel-daemon /etc/init.d/wansel
 chmod 644 /usr/lib/wansel/common.sh
-chmod 644 /usr/share/luci/menu.d/luci-app-wan-switch.json
-chmod 644 /usr/share/rpcd/acl.d/luci-app-wan-switch.json
+chmod 644 /usr/share/luci/menu.d/luci-app-wans-switch.json
+chmod 644 /usr/share/rpcd/acl.d/luci-app-wans-switch.json
 chmod 644 /www/luci-static/resources/view/wan_switch/overview.js
 
 echo "==> 启用服务"

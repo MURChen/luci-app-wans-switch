@@ -1,5 +1,5 @@
 {
-	"luci-app-wan-switch": {
+	"luci-app-wans-switch": {
 		"description": "Grant access to the WAN switch CLI",
 		"read": {
 			"file": {

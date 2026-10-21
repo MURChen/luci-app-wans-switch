@@ -1,4 +1,4 @@
-# luci-app-wan-switch
+# luci-app-wans-switch
 
 在 OpenWrt 上快速切换默认出口：**宽带（WAN）** ↔ **安卓 USB 共享（RNDIS）**。
 
@@ -144,8 +144,8 @@ root/
 ├── usr/lib/wansel/common.sh                   # 公共库：接口发现、路由、探测、统计
 ├── usr/sbin/wansel                            # CLI
 ├── usr/sbin/wansel-daemon                     # 守护进程
-├── usr/share/luci/menu.d/luci-app-wan-switch.json
-├── usr/share/rpcd/acl.d/luci-app-wan-switch.json
+├── usr/share/luci/menu.d/luci-app-wans-switch.json
+├── usr/share/rpcd/acl.d/luci-app-wans-switch.json
 └── www/luci-static/resources/view/wan_switch/overview.js
 ```
 
@@ -182,8 +182,8 @@ root/
 /etc/init.d/wansel disable
 rm -f /usr/sbin/wansel /usr/sbin/wansel-daemon /etc/init.d/wansel
 rm -rf /usr/lib/wansel
-rm -f /usr/share/luci/menu.d/luci-app-wan-switch.json
-rm -f /usr/share/rpcd/acl.d/luci-app-wan-switch.json
+rm -f /usr/share/luci/menu.d/luci-app-wans-switch.json
+rm -f /usr/share/rpcd/acl.d/luci-app-wans-switch.json
 rm -f /www/luci-static/resources/view/wan_switch/overview.js
 rm -rf /etc/wansel
 rm -f /tmp/luci-indexcache*

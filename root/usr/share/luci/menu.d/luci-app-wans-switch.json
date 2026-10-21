@@ -7,7 +7,7 @@
 			"path": "wan_switch/overview"
 		},
 		"depends": {
-			"acl": [ "luci-app-wan-switch" ]
+			"acl": [ "luci-app-wans-switch" ]
 		}
 	}
 }
