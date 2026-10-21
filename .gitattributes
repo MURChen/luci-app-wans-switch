@@ -1,0 +1,7 @@
+# 全项目统一 LF：Shell 脚本 / LuCI 文件到 Linux 上不能带 CRLF
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.tar.gz binary

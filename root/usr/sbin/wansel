@@ -1,0 +1,215 @@
+#!/bin/sh
+# wansel - 出口切换命令行
+# 用法: wansel <命令>
+
+. "${WANSEL_LIB:-/usr/lib/wansel/common.sh}"
+
+usage() {
+	cat <<EOF
+用法: wansel <命令>
+
+命令:
+  status                输出 JSON 状态
+  switch wan|usb        切换出口
+  flush                 立即清理局域网连接跟踪
+  auto on|off           自动故障切换开关
+  flushcfg on|off       切换时是否自动清理连接
+  set wan <接口名>      手动指定宽带接口（空字符串=自动识别）
+  set usb <接口名>      手动指定 USB 共享接口（空字符串=自动识别）
+  quota <GB>            设置 5G 月流量额度
+  usbmount              立即尝试挂载 USB 共享（忽略冷却）
+  export                导出配置（文本）
+  import <文件>         导入配置
+  config k=v ...        更新自动切换配置（probe_gw/probe_net/fail_threshold/auto_recover/recover_conn 等）
+  reset-traffic         重置 5G 流量统计
+  interfaces            输出接口发现结果（JSON）
+EOF
+}
+
+cmd_status() {
+	if [ -f "$STATUS_FILE" ]; then
+		cat "$STATUS_FILE"
+	else
+		build_status_json
+	fi
+}
+
+cmd_interfaces() {
+	interfaces_json
+	echo
+}
+
+cmd_switch() {
+	local target="$1"
+	case "$target" in
+		wan|usb) ;;
+		*) echo "错误: 目标必须是 wan 或 usb"; exit 1 ;;
+	esac
+
+	if [ "$target" = "wan" ]; then
+		wif=$(resolve_wan_if)
+		[ -n "$wif" ] || { echo "错误: 未找到可用的宽带接口"; exit 1; }
+		[ "$(iface_up "$wif")" = "true" ] || { echo "错误: 宽带接口 $wif 未连接"; exit 1; }
+	else
+		uif=$(resolve_usb_if)
+		[ -n "$uif" ] || { echo "错误: 未找到可用的 USB 共享接口"; exit 1; }
+		[ "$(iface_up "$uif")" = "true" ] || { echo "错误: USB 共享接口 $uif 未连接"; exit 1; }
+	fi
+
+	set_active "$target"
+	rm -f "$STATE_DIR/fail_route"
+	sync_routes
+
+	if [ "$(get_setting flush_on_switch 1)" = "1" ]; then
+		flush_conntrack >/dev/null 2>&1
+	fi
+
+	if [ "$target" = "usb" ]; then
+		add_event switch "手动切换到 5G ($(resolve_usb_if))"
+		echo "已切换到 5G"
+	else
+		add_event switch "手动切换到 宽带 ($(resolve_wan_if))"
+		echo "已切换到 宽带"
+	fi
+
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_flush() {
+	if flush_conntrack; then
+		add_event flush "手动清理连接跟踪"
+		echo "已清理局域网连接跟踪"
+	else
+		echo "错误: 未安装 conntrack，请执行 opkg update && opkg install conntrack"
+		exit 1
+	fi
+}
+
+cmd_auto() {
+	case "$1" in
+		on)  set_setting auto 1; echo "自动故障切换已开启" ;;
+		off) set_setting auto 0; echo "自动故障切换已关闭" ;;
+		*) echo "用法: wansel auto on|off"; exit 1 ;;
+	esac
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_flushcfg() {
+	case "$1" in
+		on)  set_setting flush_on_switch 1; echo "切换时清理连接已开启" ;;
+		off) set_setting flush_on_switch 0; echo "切换时清理连接已关闭" ;;
+		*) echo "用法: wansel flushcfg on|off"; exit 1 ;;
+	esac
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_set() {
+	local kind="$1" val="$2"
+	case "$kind" in
+		wan) set_setting wan_if "$val"; echo "宽带接口已设为: ${val:-自动}" ;;
+		usb) set_setting usb_if "$val"; echo "USB 接口已设为: ${val:-自动}" ;;
+		*) echo "用法: wansel set wan|usb <接口名>"; exit 1 ;;
+	esac
+	rm -f "$IFACES_CACHE" "$IFACES_TS"
+	sync_routes
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_reset_traffic() {
+	traffic_set_all "$(date +%Y-%m)" 0 0 0 0
+	add_event info "手动重置 5G 流量统计"
+	echo "5G 流量统计已重置"
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_quota() {
+	case "$1" in
+		''|*[!0-9]*) echo "用法: wansel quota <GB，正整数>"; exit 1 ;;
+	esac
+	set_setting quota_gb "$1"
+	add_event info "5G 额度设为 $1 GB"
+	echo "5G 额度已设为 $1 GB"
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_usbmount() {
+	usb_autoup_try force
+}
+
+cmd_export() {
+	echo "# wansel config"
+	echo "# $(date '+%Y-%m-%d %H:%M:%S')"
+	[ -f "$SETTINGS_FILE" ] && cat "$SETTINGS_FILE"
+}
+
+cmd_import() {
+	local file="$1" count=0 line key val
+	[ -n "$file" ] && [ -f "$file" ] || { echo "配置文件不存在"; exit 1; }
+
+	while IFS= read -r line; do
+		case "$line" in
+			''|'#'*) continue ;;
+		esac
+		key="${line%%=*}"
+		val="${line#*=}"
+		case "$key" in
+			auto|probe_gw|probe_net|auto_recover|usb_autoup|flush_on_switch)
+				case "$val" in 0|1) set_setting "$key" "$val"; count=$((count+1)) ;; esac ;;
+			fail_threshold|probe_interval|quota_gb|traffic_base_gb)
+				case "$val" in ''|*[!0-9]*) ;; *) set_setting "$key" "$val"; count=$((count+1)) ;; esac ;;
+			recover_conn)
+				case "$val" in flush|new|keep) set_setting "$key" "$val"; count=$((count+1)) ;; esac ;;
+			probe_gw_target|probe_net_target|wan_if|usb_if)
+				set_setting "$key" "$val"; count=$((count+1)) ;;
+		esac
+	done < "$file"
+
+	add_event info "导入配置（$count 项）"
+	echo "已导入 $count 项配置"
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+}
+
+cmd_config() {
+	local kv key val
+	for kv in "$@"; do
+		key="${kv%%=*}"
+		val="${kv#*=}"
+		case "$key" in
+			probe_gw|probe_net|auto_recover|usb_autoup)
+				case "$val" in 0|1) set_setting "$key" "$val" ;; esac ;;
+			fail_threshold)
+				case "$val" in ''|*[!0-9]*) ;; *) set_setting "$key" "$val" ;; esac ;;
+			probe_interval)
+				case "$val" in
+					''|*[!0-9]*) ;;
+					*) [ "$val" -ge 3 ] && [ "$val" -le 120 ] && set_setting "$key" "$val" ;;
+				esac ;;
+			recover_conn)
+				case "$val" in flush|new|keep) set_setting "$key" "$val" ;; esac ;;
+			probe_gw_target|probe_net_target)
+				set_setting "$key" "$val" ;;
+			traffic_base_gb)
+				case "$val" in ''|*[!0-9]*) ;; *) set_setting "$key" "$val" ;; esac ;;
+		esac
+	done
+	add_event info "更新自动切换设置"
+	build_status_json > "$STATUS_FILE" 2>/dev/null
+	echo "设置已保存"
+}
+
+case "$1" in
+	status)      cmd_status ;;
+	interfaces)  cmd_interfaces ;;
+	switch)      cmd_switch "$2" ;;
+	flush)       cmd_flush ;;
+	auto)        cmd_auto "$2" ;;
+	flushcfg)    cmd_flushcfg "$2" ;;
+	set)         cmd_set "$2" "$3" ;;
+	quota)       cmd_quota "$2" ;;
+	usbmount)    cmd_usbmount ;;
+	export)      cmd_export ;;
+	import)      cmd_import "$2" ;;
+	config)      shift; cmd_config "$@" ;;
+	reset-traffic) cmd_reset_traffic ;;
+	*)           usage; exit 1 ;;
+esac

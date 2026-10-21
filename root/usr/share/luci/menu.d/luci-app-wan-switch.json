@@ -1,0 +1,13 @@
+{
+	"admin/network/wan-switch": {
+		"title": "出口切换",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "wan_switch/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-wan-switch" ]
+		}
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"luci-app-wan-switch": {
+		"description": "Grant access to the WAN switch CLI",
+		"read": {
+			"file": {
+				"/usr/sbin/wansel": [ "exec" ]
+			},
+			"ubus": {
+				"network.interface.*": [ "dump", "status" ]
+			}
+		},
+		"write": {
+			"file": {
+				"/usr/sbin/wansel": [ "exec" ],
+				"/tmp/wansel/import.txt": [ "write" ]
+			}
+		}
+	}
+}

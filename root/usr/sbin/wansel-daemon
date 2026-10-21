@@ -1,0 +1,238 @@
+#!/bin/sh
+# wansel-daemon - 路由守卫 + 故障自动切换 + 探测 + 流量累计
+#
+# 探测方式、失败阈值、是否自动切回、恢复时连接处理均可在 LuCI 页面配置。
+
+. "${WANSEL_LIB:-/usr/lib/wansel/common.sh}"
+
+PERSIST_INTERVAL=60   # 流量持久化间隔（秒）
+
+probe_fail_file() { echo "$STATE_DIR/fail_$1"; }
+fail_count() {
+	local f c
+	f=$(probe_fail_file "$1")
+	c=$(cat "$f" 2>/dev/null || echo 0)
+	case "$c" in ''|*[!0-9]*) c=0 ;; esac
+	echo "$c"
+}
+fail_inc()   { echo $(( $(fail_count "$1") + 1 )) > "$(probe_fail_file "$1")"; }
+fail_clear() { echo 0 > "$(probe_fail_file "$1")"; }
+
+# ---------- 流量累计 ----------
+tr_month=""; tr_rx=0; tr_tx=0; tr_last_rx=0; tr_last_tx=0
+
+traffic_load() {
+	tr_month=$(traffic_get month)
+	tr_rx=$(traffic_get rx); tr_last_rx=$(traffic_get last_rx)
+	tr_tx=$(traffic_get tx); tr_last_tx=$(traffic_get last_tx)
+	[ -n "$tr_month" ]   || tr_month=$(date +%Y-%m)
+	[ -n "$tr_rx" ]      || tr_rx=0
+	[ -n "$tr_tx" ]      || tr_tx=0
+	[ -n "$tr_last_rx" ] || tr_last_rx=0
+	[ -n "$tr_last_tx" ] || tr_last_tx=0
+}
+
+traffic_persist() {
+	traffic_set_all "$tr_month" "$tr_rx" "$tr_tx" "$tr_last_rx" "$tr_last_tx"
+}
+
+# 首次运行：把当前计数器作为基准，避免把接口开机以来的历史流量算进本月
+traffic_init_if_needed() {
+	[ -f "$TRAFFIC_FILE" ] && return 0
+	local dev
+	dev=$(iface_dev "$(resolve_usb_if)")
+	[ -n "$dev" ] || return 0
+	traffic_set_all "$(date +%Y-%m)" 0 0 \
+		"$(cat "/sys/class/net/$dev/statistics/rx_bytes" 2>/dev/null || echo 0)" \
+		"$(cat "/sys/class/net/$dev/statistics/tx_bytes" 2>/dev/null || echo 0)"
+}
+
+traffic_tick() {
+	local dev now_rx now_tx drx dtx
+	dev=$(iface_dev "$(resolve_usb_if)")
+	[ -n "$dev" ] || return 0
+	now_rx=$(cat "/sys/class/net/$dev/statistics/rx_bytes" 2>/dev/null || echo 0)
+	now_tx=$(cat "/sys/class/net/$dev/statistics/tx_bytes" 2>/dev/null || echo 0)
+	case "$now_rx" in ''|*[!0-9]*) now_rx=0 ;; esac
+	case "$now_tx" in ''|*[!0-9]*) now_tx=0 ;; esac
+
+	if [ "$now_rx" -lt "$tr_last_rx" ]; then drx=$now_rx; else drx=$((now_rx - tr_last_rx)); fi
+	if [ "$now_tx" -lt "$tr_last_tx" ]; then dtx=$now_tx; else dtx=$((now_tx - tr_last_tx)); fi
+
+	tr_rx=$((tr_rx + drx))
+	tr_tx=$((tr_tx + dtx))
+	tr_last_rx=$now_rx
+	tr_last_tx=$now_tx
+
+	if [ "$(date +%Y-%m)" != "$tr_month" ]; then
+		tr_month=$(date +%Y-%m)
+		tr_rx=0
+		tr_tx=0
+	fi
+}
+
+# 切换后按配置处理连接
+post_switch() {
+	case "$(get_setting recover_conn flush)" in
+		flush) flush_conntrack >/dev/null 2>&1 ;;
+	esac
+}
+
+# ---------- 主循环 ----------
+traffic_init_if_needed
+traffic_load
+[ -f "$STATE_FILE" ] || set_active wan
+add_event boot "守护进程启动，当前出口: $(current_active)"
+
+last_persist=$(date +%s)
+while :; do
+	active=$(current_active)
+
+	# 启动时 USB 不在的话，等它出现后再初始化流量基准
+	if [ ! -f "$TRAFFIC_FILE" ]; then
+		traffic_init_if_needed
+		traffic_load
+	fi
+
+	interval=$(get_setting probe_interval 10)
+	case "$interval" in ''|*[!0-9]*) interval=10 ;; esac
+	[ "$interval" -ge 3 ] && [ "$interval" -le 120 ] || interval=10
+
+	# 每轮读取配置，页面修改后无需重启
+	probe_gw_on=$(get_setting probe_gw 1)
+	probe_net_on=$(get_setting probe_net 1)
+	gw_target=$(get_setting probe_gw_target "")
+	net_target=$(get_setting probe_net_target "223.5.5.5")
+	threshold=$(get_setting fail_threshold 3)
+	case "$threshold" in ''|*[!0-9]*) threshold=3 ;; esac
+	auto_recover=$(get_setting auto_recover 0)
+
+	wan_if=$(resolve_wan_if)
+	usb_if=$(resolve_usb_if)
+
+	wan_dev=$(iface_dev "$wan_if"); wan_up=$(iface_up "$wan_if"); wan_gw=$(iface_gw "$wan_if")
+	usb_dev=$(iface_dev "$usb_if"); usb_up=$(iface_up "$usb_if"); usb_gw=$(iface_gw "$usb_if")
+
+	# 0. USB 共享自动挂载
+	if [ "$(get_setting usb_autoup 1)" = "1" ]; then
+		usb_autoup_try >/dev/null 2>&1
+	fi
+
+	# 1. 路由守卫
+	sync_routes
+
+	# 2. 探测
+	wan_gw_ms=""; wan_net_ms=""; usb_gw_ms=""; usb_net_ms=""
+	wan_ok=1; usb_ok=1
+
+	if [ "$probe_gw_on" = "1" ]; then
+		if [ "$wan_up" = "true" ] && [ -n "$wan_dev" ]; then
+			t="$wan_gw"; [ "$active" = "wan" ] && [ -n "$gw_target" ] && t="$gw_target"
+			wan_gw_ms=$(latency "$wan_dev" "$t")
+			[ -n "$wan_gw_ms" ] || wan_ok=0
+		else
+			wan_ok=0
+		fi
+		if [ "$usb_up" = "true" ] && [ -n "$usb_dev" ]; then
+			t="$usb_gw"; [ "$active" = "usb" ] && [ -n "$gw_target" ] && t="$gw_target"
+			usb_gw_ms=$(latency "$usb_dev" "$t")
+			[ -n "$usb_gw_ms" ] || usb_ok=0
+		else
+			usb_ok=0
+		fi
+	else
+		[ "$wan_up" = "true" ] || wan_ok=0
+		[ "$usb_up" = "true" ] || usb_ok=0
+	fi
+
+	if [ "$probe_net_on" = "1" ]; then
+		if [ "$active" = "wan" ] && [ "$wan_up" = "true" ] && [ -n "$wan_dev" ]; then
+			wan_net_ms=$(latency "$wan_dev" "$net_target")
+			[ -n "$wan_net_ms" ] || wan_ok=0
+		elif [ "$active" = "usb" ] && [ "$usb_up" = "true" ] && [ -n "$usb_dev" ]; then
+			usb_net_ms=$(latency "$usb_dev" "$net_target")
+			[ -n "$usb_net_ms" ] || usb_ok=0
+		fi
+	fi
+
+	[ "$wan_ok" = "1" ] && fail_clear wan || fail_inc wan
+	[ "$usb_ok" = "1" ] && fail_clear usb || fail_inc usb
+
+	# 3. 自动切换
+	if [ "$(get_setting auto 1)" = "1" ]; then
+		if [ "$active" = "wan" ] && [ "$wan_up" != "true" ] && [ "$usb_up" = "true" ]; then
+			echo "wan" > "$STATE_DIR/fail_route"
+			set_active usb; sync_routes; fail_clear wan
+			post_switch
+			add_event auto "宽带接口断开，自动切到 5G"
+		elif [ "$active" = "usb" ] && [ "$usb_up" != "true" ] && [ "$wan_up" = "true" ]; then
+			echo "usb" > "$STATE_DIR/fail_route"
+			set_active wan; sync_routes; fail_clear usb
+			post_switch
+			add_event auto "USB 共享断开，自动切到宽带"
+		fi
+
+		if [ "$active" = "wan" ] && [ "$(fail_count wan)" -ge "$threshold" ] && [ "$usb_up" = "true" ]; then
+			echo "wan" > "$STATE_DIR/fail_route"
+			set_active usb; sync_routes; fail_clear wan
+			post_switch
+			add_event auto "宽带连续 $threshold 次探测失败，自动切到 5G"
+		fi
+		if [ "$active" = "usb" ] && [ "$(fail_count usb)" -ge "$threshold" ] && [ "$wan_up" = "true" ]; then
+			echo "usb" > "$STATE_DIR/fail_route"
+			set_active wan; sync_routes; fail_clear usb
+			post_switch
+			add_event auto "5G 连续 $threshold 次探测失败，自动切到宽带"
+		fi
+	fi
+
+	# 4. 自动切回断线前的线路
+	if [ "$auto_recover" = "1" ]; then
+		fr=$(cat "$STATE_DIR/fail_route" 2>/dev/null)
+		if [ -n "$fr" ] && [ "$fr" != "$active" ]; then
+			fr_ok=0
+			if [ "$fr" = "wan" ]; then
+				[ "$wan_up" = "true" ] && [ "$(fail_count wan)" -eq 0 ] && fr_ok=1
+			else
+				[ "$usb_up" = "true" ] && [ "$(fail_count usb)" -eq 0 ] && fr_ok=1
+			fi
+			if [ "$fr_ok" = "1" ]; then
+				set_active "$fr"; sync_routes; rm -f "$STATE_DIR/fail_route"
+				post_switch
+				add_event auto "原线路恢复，自动切回"
+			fi
+		fi
+	fi
+
+	# 5. 宽带状态翻转提示（仅在异常时记录一次）
+	now_wan_ok=0
+	[ "$wan_up" = "true" ] && [ "$wan_ok" = "1" ] && now_wan_ok=1
+	prev=$(cat "$STATE_DIR/wan_was_ok" 2>/dev/null || echo "")
+	if [ "$now_wan_ok" != "$prev" ]; then
+		echo "$now_wan_ok" > "$STATE_DIR/wan_was_ok"
+		[ "$now_wan_ok" = "0" ] && add_event warn "宽带连接异常"
+	fi
+
+	# 6. 写探测缓存
+	{
+		echo "wan_gw_ms=$wan_gw_ms"
+		echo "wan_net_ms=$wan_net_ms"
+		echo "usb_gw_ms=$usb_gw_ms"
+		echo "usb_net_ms=$usb_net_ms"
+	} > "$PROBE_FILE.tmp" && mv "$PROBE_FILE.tmp" "$PROBE_FILE"
+
+	# 7. 流量
+	traffic_tick
+
+	# 8. 状态缓存
+	build_status_json > "$STATUS_FILE.tmp" 2>/dev/null && mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+
+	# 9. 流量持久化（每 60 秒）
+	now=$(date +%s)
+	if [ $((now - last_persist)) -ge "$PERSIST_INTERVAL" ]; then
+		traffic_persist
+		last_persist=$now
+	fi
+
+	sleep "$interval"
+done

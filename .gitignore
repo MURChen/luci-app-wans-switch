@@ -1,0 +1,16 @@
+# build / package artifacts
+*.tar.gz
+*.ipk
+*.log
+
+# local test keys (NEVER commit)
+tmp-ssh/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# editor
+.vscode/
+.idea/
+.DS_Store
