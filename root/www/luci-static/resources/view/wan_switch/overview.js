@@ -649,7 +649,7 @@ return view.extend({
 	paintSwitch: function(st) {
 		var self = this;
 		var cfg = st.config || {};
-		var state = st.switch_state || 'unknown';
+		var state = st.switch_state || cfg.switch_state || 'unknown';
 		var enabled = cfg.switch_enable === 1;
 
 		clear(this.switchEl);
