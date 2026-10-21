@@ -302,6 +302,17 @@ probe_gw() {
 	ping -c 1 -W 1 -I "$1" "$2" >/dev/null 2>&1
 }
 
+# 从指定接口测外网延迟：临时加一条 /32 路由，测完删除
+# 仅用于「非当前出口」的展示，不参与故障判定
+latency_via() {
+	local dev="$1" gw="$2" target="$3" ms
+	[ -n "$dev" ] && [ -n "$gw" ] && [ -n "$target" ] || return 1
+	ip route add "$target/32" via "$gw" dev "$dev" metric 9999 2>/dev/null
+	ms=$(latency "$dev" "$target")
+	ip route del "$target/32" via "$gw" dev "$dev" metric 9999 2>/dev/null
+	echo "$ms"
+}
+
 # ---------- 路由 ----------
 effective_dev() {
 	ip -4 route get "$PROBE_NET" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1

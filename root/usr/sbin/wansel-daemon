@@ -146,12 +146,24 @@ while :; do
 	fi
 
 	if [ "$probe_net_on" = "1" ]; then
-		if [ "$active" = "wan" ] && [ "$wan_up" = "true" ] && [ -n "$wan_dev" ]; then
-			wan_net_ms=$(latency "$wan_dev" "$net_target")
-			[ -n "$wan_net_ms" ] || wan_ok=0
-		elif [ "$active" = "usb" ] && [ "$usb_up" = "true" ] && [ -n "$usb_dev" ]; then
-			usb_net_ms=$(latency "$usb_dev" "$net_target")
-			[ -n "$usb_net_ms" ] || usb_ok=0
+		# 当前出口：走默认路由，参与故障判定
+		# 非当前出口：临时 /32 路由探测，仅用于展示
+		if [ "$active" = "wan" ]; then
+			if [ "$wan_up" = "true" ] && [ -n "$wan_dev" ]; then
+				wan_net_ms=$(latency "$wan_dev" "$net_target")
+				[ -n "$wan_net_ms" ] || wan_ok=0
+			fi
+			if [ "$usb_up" = "true" ] && [ -n "$usb_dev" ] && [ -n "$usb_gw" ]; then
+				usb_net_ms=$(latency_via "$usb_dev" "$usb_gw" "119.29.29.29")
+			fi
+		else
+			if [ "$usb_up" = "true" ] && [ -n "$usb_dev" ]; then
+				usb_net_ms=$(latency "$usb_dev" "$net_target")
+				[ -n "$usb_net_ms" ] || usb_ok=0
+			fi
+			if [ "$wan_up" = "true" ] && [ -n "$wan_dev" ] && [ -n "$wan_gw" ]; then
+				wan_net_ms=$(latency_via "$wan_dev" "$wan_gw" "119.29.29.29")
+			fi
 		fi
 	fi
 
