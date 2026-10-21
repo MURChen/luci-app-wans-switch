@@ -461,6 +461,16 @@ build_status_json() {
 	probe_iv=$(get_setting probe_interval 10)
 	case "$probe_iv" in ''|*[!0-9]*) probe_iv=10 ;; esac
 
+	# GL.iNet 物理拨动开关当前状态（非 GL 固件为 unknown）
+	local sw_state=""
+	if [ -f /lib/functions/gl_util.sh ]; then
+		sw_state=$(. /lib/functions/gl_util.sh; get_switch_button_status 2>/dev/null)
+	fi
+	case "$sw_state" in
+		on|off) ;;
+		*) sw_state="unknown" ;;
+	esac
+
 	local rc
 	rc=$(get_setting recover_conn flush)
 	case "$rc" in flush|new|keep) ;; *) rc=flush ;; esac
@@ -519,7 +529,8 @@ build_status_json() {
     "usb_autoup": $(num_setting usb_autoup 1),
     "switch_enable": $(num_setting switch_enable 1),
     "switch_on_target": "$(get_setting switch_on_target "usb")",
-    "switch_off_target": "$(get_setting switch_off_target "wan")"
+    "switch_off_target": "$(get_setting switch_off_target "wan")",
+    "switch_state": "$sw_state"
   },
   "traffic": { "month": "$(json_esc "$tr_month")", "rx": $tr_rx, "tx": $tr_tx, "quota_gb": $tr_quota, "base_gb": $tr_base },
   "conntrack": { "total": $ct_total, "wan": $ct_wan, "usb": $ct_usb, "lan": $ct_lan },

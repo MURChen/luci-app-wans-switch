@@ -68,6 +68,9 @@ var CSS = [
 '.wansel-switch-text{flex:1;min-width:0}',
 '.wansel-switch-title{font-size:14px;font-weight:500}',
 '.wansel-switch-desc{font-size:12px;color:var(--text-color-medium,#888);margin-top:3px;line-height:1.5}',
+'.wansel-state-badge{font-size:13px;font-weight:600;padding:4px 12px;border-radius:999px;background:rgba(130,130,130,.15);color:var(--text-color-medium,#888)}',
+'.wansel-state-badge.on{background:rgba(47,179,68,.16);color:#2fb344}',
+'.wansel-state-badge.unknown{background:rgba(255,193,7,.16);color:#c08a00}',
 
 '.wansel-switch{position:relative;display:inline-block;width:46px;height:26px;flex:none;cursor:pointer}',
 '.wansel-switch input{opacity:0;width:0;height:0;position:absolute;margin:0}',
@@ -200,6 +203,7 @@ return view.extend({
 		this.gridEl = E('div', { 'class': 'wansel-grid' });
 		this.ifaceEl = E('div', { 'class': 'wansel-panel' });
 		this.ctrlEl = E('div', { 'class': 'wansel-panel' });
+		this.switchEl = E('div', { 'class': 'wansel-panel' });
 		this.conntrackEl = E('div', { 'class': 'wansel-panel' });
 		this.trafficEl = E('div', { 'class': 'wansel-panel' });
 		this.configEl = E('div', { 'class': 'wansel-panel' });
@@ -210,6 +214,7 @@ return view.extend({
 		this.root.appendChild(this.gridEl);
 		this.root.appendChild(this.ifaceEl);
 		this.root.appendChild(this.ctrlEl);
+		this.root.appendChild(this.switchEl);
 		this.root.appendChild(this.conntrackEl);
 		this.root.appendChild(this.trafficEl);
 		this.root.appendChild(this.configEl);
@@ -239,6 +244,7 @@ return view.extend({
 		this.paintCards(st);
 		this.paintInterfaces(st);
 		this.paintControls(st);
+		this.paintSwitch(st);
 		this.paintConntrack(st);
 		this.paintTraffic(st);
 		this.paintConfig(st);
@@ -488,8 +494,6 @@ return view.extend({
 				this.autoInput.checked = (st.auto === 1);
 			if (this.usbInput)
 				this.usbInput.checked = (cfg.usb_autoup === 1);
-			if (this.switchInput)
-				this.switchInput.checked = (cfg.switch_enable === 1);
 			this.updateGwHint(st);
 			return;
 		}
@@ -522,19 +526,6 @@ return view.extend({
 		);
 		this.usbInput = usbRow.querySelector('input');
 		this.ctrlEl.appendChild(usbRow);
-
-		var swRow = this.switchRow(
-			_('物理拨动开关'),
-			_('GL.iNet 开关拨到开 = 切到 5G，关 = 切回宽带（仅 GL 固件有效，其他固件自动忽略）。'),
-			cfg.switch_enable === 1,
-			function(checked) {
-				fs.exec(WANSEL, ['config', 'switch_enable=' + (checked ? 1 : 0)])
-					.then(function() { self.refresh(); })
-					.catch(function(e) { self.notify(e.message || e, 'error'); });
-			}
-		);
-		this.switchInput = swRow.querySelector('input');
-		this.ctrlEl.appendChild(swRow);
 
 		var mountBtn = E('button', {
 			'class': 'btn cbi-button',
@@ -652,6 +643,41 @@ return view.extend({
 		var wg = (st.wan && st.wan.gw) || '--';
 		var ug = (st.usb && st.usb.gw) || '--';
 		this.gwHint.textContent = _('自动获取') + '：' + _('宽带') + ' ' + wg + ' / USB ' + ug;
+	},
+
+	// ---------- 物理拨动开关 ----------
+	paintSwitch: function(st) {
+		var self = this;
+		var cfg = st.config || {};
+		var state = st.switch_state || 'unknown';
+		var enabled = cfg.switch_enable === 1;
+
+		clear(this.switchEl);
+		this.switchEl.appendChild(E('h3', {}, [_('物理拨动开关')]));
+
+		var stateLabel = state === 'on' ? _('开') : (state === 'off' ? _('关') : _('未知'));
+		var stateCls = state === 'on' ? ' on' : (state === 'off' ? '' : ' unknown');
+
+		this.switchEl.appendChild(E('div', { 'class': 'wansel-switch-row' }, [
+			E('div', { 'class': 'wansel-switch-text' }, [
+				E('div', { 'class': 'wansel-switch-title' }, [_('当前开关状态')]),
+				E('div', { 'class': 'wansel-switch-desc' }, [
+					enabled ? _('开 = 切到 5G，关 = 切回宽带') : _('开关联动已关闭')
+				])
+			]),
+			E('span', { 'class': 'wansel-state-badge' + stateCls }, [stateLabel])
+		]));
+
+		this.switchEl.appendChild(this.switchRow(
+			_('启用开关联动'),
+			_('拨动路由器物理开关时自动切换出口。仅 GL.iNet 固件有效。'),
+			enabled,
+			function(checked) {
+				fs.exec(WANSEL, ['config', 'switch_enable=' + (checked ? 1 : 0)])
+					.then(function() { self.refresh(); })
+					.catch(function(e) { self.notify(e.message || e, 'error'); });
+			}
+		));
 	},
 
 	switchRow: function(title, desc, checked, onchange) {
