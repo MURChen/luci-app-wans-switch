@@ -55,7 +55,7 @@ netifd 原有的两条默认路由（宽带 metric 1、USB metric 3）保持不�
 
 ### 与 OpenClash 的关系
 
-OpenClash 在 redir-host 模式下：
+实测 OpenClash 在 redir-host 兼容模式下：
 
 - TCP 通过 `nat PREROUTING REDIRECT` 劫持到代理端口
 - UDP 通过 `mangle TPROXY` + `mark 0x162` 接管
@@ -79,10 +79,10 @@ OpenClash 在 redir-host 模式下：
 
 ```sh
 # 1. 上传到路由器
-scp wan-switch.tar.gz root@192.168.1.1:/tmp/
+scp wan-switch.tar.gz root@路由器IP:/tmp/
 
 # 2. 解压并安装
-ssh root@192.168.1.1
+ssh root@路由器IP
 cd /tmp && mkdir -p wan-switch && tar -xzf wan-switch.tar.gz -C wan-switch
 cd wan-switch && sh install.sh
 
