@@ -17,7 +17,7 @@ SETTINGS_DIR="/etc/wansel"
 SETTINGS_FILE="$SETTINGS_DIR/settings"  # 持久设置
 TRAFFIC_FILE="$SETTINGS_DIR/traffic"    # 5G 流量累计（持久）
 
-WANSEL_VERSION="1.3"
+WANSEL_VERSION="1.2"
 WANSEL_REPO="https://github.com/MURChen/luci-app-wans-switch"
 
 OVERRIDE_METRIC=0
