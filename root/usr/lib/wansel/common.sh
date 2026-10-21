@@ -516,7 +516,10 @@ build_status_json() {
     "auto_recover": $(num_setting auto_recover 0),
     "recover_conn": "$rc",
     "probe_interval": $probe_iv,
-    "usb_autoup": $(num_setting usb_autoup 1)
+    "usb_autoup": $(num_setting usb_autoup 1),
+    "switch_enable": $(num_setting switch_enable 1),
+    "switch_on_target": "$(get_setting switch_on_target "usb")",
+    "switch_off_target": "$(get_setting switch_off_target "wan")"
   },
   "traffic": { "month": "$(json_esc "$tr_month")", "rx": $tr_rx, "tx": $tr_tx, "quota_gb": $tr_quota, "base_gb": $tr_base },
   "conntrack": { "total": $ct_total, "wan": $ct_wan, "usb": $ct_usb, "lan": $ct_lan },

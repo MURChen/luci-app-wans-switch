@@ -1,0 +1,35 @@
+#!/bin/sh
+# wansel-switchd - GL.iNet 物理拨动开关 -> 出口切换
+#
+# 每 2 秒读取一次开关状态（on / off），状态变化时调用 wansel switch。
+# 仅 GL.iNet 固件可用（依赖 /lib/functions/gl_util.sh）。
+
+. "${WANSEL_LIB:-/usr/lib/wansel/common.sh}"
+
+[ -f /lib/functions/gl_util.sh ] || exit 0
+. /lib/functions/gl_util.sh
+
+# 等网络就绪
+sleep 5
+
+last=""
+while :; do
+	if [ "$(num_setting switch_enable 1)" = "1" ]; then
+		cur=$(get_switch_button_status 2>/dev/null)
+		if [ "$cur" = "on" ] || [ "$cur" = "off" ]; then
+			if [ -n "$last" ] && [ "$cur" != "$last" ]; then
+				case "$cur" in
+					on)  target=$(get_setting switch_on_target "usb") ;;
+					off) target=$(get_setting switch_off_target "wan") ;;
+				esac
+				if [ -n "$target" ]; then
+					/usr/sbin/wansel switch "$target" >/dev/null 2>&1
+					add_event switch "拨动开关 -> $cur，切换到 $target"
+					logger -t wansel "switch button -> $cur, target=$target"
+				fi
+			fi
+			last="$cur"
+		fi
+	fi
+	sleep 2
+done

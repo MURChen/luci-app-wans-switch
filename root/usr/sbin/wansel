@@ -188,6 +188,10 @@ cmd_config() {
 				case "$val" in flush|new|keep) set_setting "$key" "$val" ;; esac ;;
 			probe_gw_target|probe_net_target)
 				set_setting "$key" "$val" ;;
+			switch_enable)
+				case "$val" in 0|1) set_setting "$key" "$val" ;; esac ;;
+			switch_on_target|switch_off_target)
+				case "$val" in wan|usb) set_setting "$key" "$val" ;; esac ;;
 			traffic_base_gb)
 				case "$val" in ''|*[!0-9]*) ;; *) set_setting "$key" "$val" ;; esac ;;
 		esac

@@ -488,6 +488,8 @@ return view.extend({
 				this.autoInput.checked = (st.auto === 1);
 			if (this.usbInput)
 				this.usbInput.checked = (cfg.usb_autoup === 1);
+			if (this.switchInput)
+				this.switchInput.checked = (cfg.switch_enable === 1);
 			this.updateGwHint(st);
 			return;
 		}
@@ -520,6 +522,19 @@ return view.extend({
 		);
 		this.usbInput = usbRow.querySelector('input');
 		this.ctrlEl.appendChild(usbRow);
+
+		var swRow = this.switchRow(
+			_('物理拨动开关'),
+			_('GL.iNet 开关拨到开 = 切到 5G，关 = 切回宽带（仅 GL 固件有效，其他固件自动忽略）。'),
+			cfg.switch_enable === 1,
+			function(checked) {
+				fs.exec(WANSEL, ['config', 'switch_enable=' + (checked ? 1 : 0)])
+					.then(function() { self.refresh(); })
+					.catch(function(e) { self.notify(e.message || e, 'error'); });
+			}
+		);
+		this.switchInput = swRow.querySelector('input');
+		this.ctrlEl.appendChild(swRow);
 
 		var mountBtn = E('button', {
 			'class': 'btn cbi-button',

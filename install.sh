@@ -16,7 +16,7 @@ fi
 echo "==> 复制文件"
 cp -r "$BASE/root/." /
 
-chmod 755 /usr/sbin/wansel /usr/sbin/wansel-daemon /etc/init.d/wansel
+chmod 755 /usr/sbin/wansel /usr/sbin/wansel-daemon /usr/sbin/wansel-switchd /etc/init.d/wansel /etc/init.d/wansel-switchd
 chmod 644 /usr/lib/wansel/common.sh
 chmod 644 /usr/share/luci/menu.d/luci-app-wans-switch.json
 chmod 644 /usr/share/rpcd/acl.d/luci-app-wans-switch.json
@@ -25,6 +25,10 @@ chmod 644 /www/luci-static/resources/view/wan_switch/overview.js
 echo "==> 启用服务"
 /etc/init.d/wansel enable
 /etc/init.d/wansel restart 2>/dev/null || /etc/init.d/wansel start
+
+# 物理拨动开关监听（仅 GL.iNet 固件有效，其他固件不启动）
+/etc/init.d/wansel-switchd enable 2>/dev/null || true
+/etc/init.d/wansel-switchd restart 2>/dev/null || true
 
 echo "==> 重载 rpcd 权限"
 /etc/init.d/rpcd reload
