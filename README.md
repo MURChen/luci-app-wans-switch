@@ -29,7 +29,7 @@
 
 ## 界面
 
-![界面截图](docs/screenshot.webp)
+![界面截图](docs/screenshot.jpg)
 
 > 截图环境：OpenWrt 23.05 + LuCI 暗色主题，宽带与 USB 共享双出口。
 ## 工作原理
