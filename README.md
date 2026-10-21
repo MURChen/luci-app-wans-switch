@@ -76,47 +76,6 @@ netifd 原有的两条默认路由（例如Wan宽带 metric 1、USB共享 metric
 
 不清理回环（127.0.0.1）和 IPv6 出站（v6 路由未接管）。
 
-## 安装
-
-### 电脑下载并上传路由器
-
-下载 `wans-switch-install-v1.1.tar.gz` 并上传到路由器：
-
-```sh
-scp wans-switch-install-v1.1.tar.gz root@openwrt的ip:/tmp/
-```
-
-### 或者使用 wget 等命令
-
-直接在路由器上执行：
-
-```sh
-# wget
-wget -O wans-switch-install-v1.1.tar.gz https://github.com/MURChen/luci-app-wans-switch/releases/download/v1.1/wans-switch-install-v1.1.tar.gz
-
-# 或 curl
-curl -L -o wans-switch-install-v1.1.tar.gz https://github.com/MURChen/luci-app-wans-switch/releases/download/v1.1/wans-switch-install-v1.1.tar.gz
-```
-
-### 解压并安装
-
-```sh
-cd /tmp
-tar -xzf wans-switch-install-v1.1.tar.gz
-cd wans-switch-install
-
-# 安装（自动复制文件、启用服务、重载 rpcd、清 LuCI 缓存）
-sh install.sh
-```
-
-安装后**退出 LuCI 并重新登录**，打开 **网络 → 出口切换**。
-
-可选依赖 `conntrack`（连接统计与清理需要，不装也能用）：
-
-```sh
-opkg update && opkg install conntrack
-```
-
 ## 配置项
 
 全部保存在 `/etc/wansel/settings`，也可在页面修改。
