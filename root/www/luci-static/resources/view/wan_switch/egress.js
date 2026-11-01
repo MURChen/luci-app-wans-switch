@@ -39,13 +39,21 @@ var CSS = [
 '.wansel-form select{flex:1;min-width:110px}',
 
 '.wansel-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}',
-'.wansel-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}',
-'@media(max-width:760px){.wansel-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}',
-'.wansel-stat-card{background:var(--background-color-low,#f7f7f7);border:1px solid var(--border-color-low,#eee);border-radius:12px;padding:10px 14px}',
-'.wansel-stat-label{font-size:11px;color:var(--text-color-medium,#888)}',
-'.wansel-stat-value{font-size:18px;font-weight:600;margin-top:2px}',
-'.wansel-stat-sub{font-size:11px;color:var(--text-color-medium,#999);margin-top:2px;font-family:monospace}',
 
+'.wansel-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}',
+'@media(max-width:640px){.wansel-stats{grid-template-columns:1fr}}',
+'.wansel-stat-card{background:var(--background-color-low,#f7f7f7);border:1px solid var(--border-color-low,#eee);border-radius:14px;padding:14px 18px;transition:border-color .2s,box-shadow .2s}',
+'.wansel-stat-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}',
+'.wansel-stat-icon{font-size:18px;line-height:1}',
+'.wansel-stat-label{flex:1;font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--text-color-medium,#888)}',
+'.wansel-stat-dot{width:8px;height:8px;border-radius:50%;background:#bbb;flex:none}',
+'.wansel-stat-dot.on{background:#2fb344;box-shadow:0 0 0 3px rgba(47,179,68,.18)}',
+'.wansel-stat-value{font-size:21px;font-weight:600;line-height:1.2}',
+'.wansel-stat-sub{font-size:12px;color:var(--text-color-medium,#999);margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
+'.ws-card-wan{border-left:3px solid #2fb344}',
+'.ws-card-usb{border-left:3px solid #2196f3}',
+'.ws-card-wan .wansel-stat-value{color:#2fb344}',
+'.ws-card-usb .wansel-stat-value{color:#2196f3}',
 '.wansel-switch{position:relative;display:inline-block;width:46px;height:26px;flex:none;cursor:pointer}',
 '.wansel-switch input{opacity:0;width:0;height:0;position:absolute;margin:0}',
 '.wansel-slider{position:absolute;inset:0;border-radius:999px;background:rgba(130,130,130,.45);transition:background .25s}',
@@ -129,29 +137,27 @@ return view.extend({
 			E('div', { 'class': 'wansel-panel' }, [
 				E('h3', {}, [ '出口状态' ]),
 				E('div', { 'class': 'wansel-stats' }, [
-					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '宽带' ]),
+					E('div', { 'class': 'wansel-stat-card ws-card-wan' }, [
+						E('div', { 'class': 'wansel-stat-head' }, [
+							E('span', { 'class': 'wansel-stat-icon' }, [ '🌐' ]),
+							E('span', { 'class': 'wansel-stat-label' }, [ '宽带' ]),
+							E('span', { 'class': 'wansel-stat-dot', 'id': 'ws-wan-dot' })
+						]),
 						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-wan-ip' },
 							[ st.wan_up === true ? '在线' : '离线' ]),
-						E('div', { 'class': 'wansel-stat-sub', 'id': 'ws-wan-counter' },
-							[ '命中: ' + (st.wan_counter || '0 0') ])
+						E('div', { 'class': 'wansel-stat-sub', 'id': 'ws-wan-count' },
+							[ '匹配 IP: ' + String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0) ])
 					]),
-					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '5G' ]),
+					E('div', { 'class': 'wansel-stat-card ws-card-usb' }, [
+						E('div', { 'class': 'wansel-stat-head' }, [
+							E('span', { 'class': 'wansel-stat-icon' }, [ '📶' ]),
+							E('span', { 'class': 'wansel-stat-label' }, [ '5G' ]),
+							E('span', { 'class': 'wansel-stat-dot', 'id': 'ws-usb-dot' })
+						]),
 						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-usb-ip' },
 							[ st.usb_up === true ? '在线' : '离线' ]),
-						E('div', { 'class': 'wansel-stat-sub', 'id': 'ws-usb-counter' },
-							[ '命中: ' + (st.usb_counter || '0 0') ])
-					]),
-					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '宽带 IP 数 (v4/v6)' ]),
-						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-wan-count' },
-							[ String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0) ])
-					]),
-					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '5G IP 数 (v4/v6)' ]),
-						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-usb-count' },
-							[ String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0) ])
+						E('div', { 'class': 'wansel-stat-sub', 'id': 'ws-usb-count' },
+							[ '匹配 IP: ' + String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0) ])
 					])
 				])
 			]),
@@ -715,17 +721,24 @@ return view.extend({
 				var el = document.getElementById(id);
 				if (el) el.textContent = txt;
 			};
+			var dot = function(id, on) {
+				var el = document.getElementById(id);
+				if (el) el.className = 'wansel-stat-dot' + (on ? ' on' : '');
+			};
+
 			set('ws-wan-ip', st.wan_up === true ? '在线' : '离线');
 			set('ws-usb-ip', st.usb_up === true ? '在线' : '离线');
-			set('ws-wan-counter', '命中: ' + (st.wan_counter || '0 0'));
-			set('ws-usb-counter', '命中: ' + (st.usb_counter || '0 0'));
-			set('ws-wan-count', String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0));
-			set('ws-usb-count', String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0));
+			dot('ws-wan-dot', st.wan_up === true);
+			dot('ws-usb-dot', st.usb_up === true);
+
+			set('ws-wan-count', '匹配 IP: ' + String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0));
+			set('ws-usb-count', '匹配 IP: ' + String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0));
 
 			var hook = document.getElementById('ws-hook');
 			if (hook) hook.checked = String(st.openclash_hook) === '1';
 		});
 	},
+
 
 	refreshConnections: function(root) {
 		var sel = document.getElementById('ws-filter');

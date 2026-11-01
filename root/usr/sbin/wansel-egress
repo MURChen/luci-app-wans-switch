@@ -1,14 +1,34 @@
 #!/bin/sh
 # wansel-egress - 按域名/IP 指定出口与协议族（IPv4 / IPv6）
+#
 # 用法:
-#   wansel-egress list
-#   wansel-egress add <domain|ip> <value> <default|wan|usb> [both|ipv4|ipv6]
-#   wansel-egress del <value>
-#   wansel-egress apply [dns]
-#   wansel-egress status
-#   wansel-egress connections [all|wan|usb|default|matched]
-#   wansel-egress hook on|off
-#   wansel-egress cleanup
+#   wansel-egress list                                           列出规则（JSON）
+#   wansel-egress add <domain|ip> <value> <default|wan|usb> [family] [group]
+#   wansel-egress edit <old> <type> <value> <via> <family> <group>  编辑单条规则
+#   wansel-egress del <value>                                    删除规则
+#   wansel-egress apply [dns]                                    应用（dns=同时重启 dnsmasq）
+#   wansel-egress status                                         状态（JSON）
+#   wansel-egress connections [all|wan|usb|default|matched] [nodns,nolan]
+#   wansel-egress flush [stale|all]                              清理旧连接
+#   wansel-egress hook on|off                                    OpenClash hook 开关
+#   wansel-egress preset list                                   列出内置预设
+#   wansel-egress preset apply <name> <via> [family] [group]    应用内置预设
+#   wansel-egress fetch <url>                                    下载并预览规则（JSON）
+#   wansel-egress import <url> <via> [family] [group]           下载并导入规则
+#   wansel-egress group list                                    列出规则组
+#   wansel-egress group set <group> <via> [family]              按组批量改出口
+#   wansel-egress group rename <old> <new>                      重命名组
+#   wansel-egress cleanup                                       清理所有策略出口规则
+#
+# 出口映射:
+#   default  跟随默认（main 表，受第一页的出口切换影响）
+#   wan      mark 0x100 -> 表 100 -> eth0
+#   usb      mark 0x101 -> 表 101 -> usb0
+#
+# 协议族:
+#   both     同时收集 A 和 AAAA
+#   ipv4     只收集 A 记录
+#   ipv6     只收集 AAAA 记录
 
 . /lib/functions.sh 2>/dev/null
 
@@ -28,9 +48,6 @@ USB_MARK="0x101"
 WAN_TABLE="100"
 USB_TABLE="101"
 WAN_PREF="1000"
-USB_PREF="1010"
-
-log() { logger -t wansel-egress "$*" 2>/dev/null; }
 
 # ---------- 接口解析 ----------
 wan_dev() { echo "eth0"; }
@@ -350,7 +367,7 @@ rebuild_mark_rules() {
 	nft add rule inet fw4 mangle_prerouting ip6 daddr @$USB_SET6 meta mark set $USB_MARK ct mark set $USB_MARK counter comment "wansel-usb-mark-v6" 2>/dev/null
 }
 
-# ---------- dnsmasq nftset + AAAA 过滤 ----------
+# ---------- dnsmasq nftset 生成 ----------
 rebuild_dnsmasq_nftset() {
 	local tmp="/tmp/wansel-egress.dns.$$"
 	awk -v b="$DNS_MARK_BEGIN" -v e="$DNS_MARK_END" '
