@@ -441,40 +441,21 @@ root/
 ## 卸载
 
 ```sh
-/etc/init.d/wansel stop
-/etc/init.d/wansel disable
-/etc/init.d/wansel-switchd stop 2>/dev/null
-/etc/init.d/wansel-switchd disable 2>/dev/null
-/etc/init.d/wansel-egress stop 2>/dev/null
-/etc/init.d/wansel-egress disable 2>/dev/null
-/etc/init.d/wansel-egress-watchdog stop 2>/dev/null
-/etc/init.d/wansel-egress-watchdog disable 2>/dev/null
-/usr/sbin/wansel-egress hook off 2>/dev/null
-/usr/sbin/wansel-egress cleanup 2>/dev/null
-rm -f /usr/sbin/wansel /usr/sbin/wansel-daemon /usr/sbin/wansel-switchd
-rm -f /usr/sbin/wansel-egress /usr/sbin/wansel-egress-watchdog
-rm -f /etc/init.d/wansel /etc/init.d/wansel-switchd
-rm -f /etc/init.d/wansel-egress /etc/init.d/wansel-egress-watchdog
-rm -rf /usr/lib/wansel
-rm -f /usr/share/luci/menu.d/luci-app-wans-switch.json
-rm -f /usr/share/rpcd/acl.d/luci-app-wans-switch.json
-rm -f /www/luci-static/resources/view/wan_switch/overview.js
-rm -f /www/luci-static/resources/view/wan_switch/egress.js
-rm -rf /etc/wansel
-rm -f /etc/config/wansel_egress
-rm -f /tmp/luci-indexcache*
-/etc/init.d/rpcd reload
+sh uninstall.sh
 ```
 
-> 卸载策略出口后，`/etc/dnsmasq.conf` 里可能残留标记块，可手动删除 `# >>> wansel-egress nftset >>>` 到 `# <<< wansel-egress nftset <<<` 之间的内容并重启 dnsmasq。
+脚本会按顺序处理：
+
+1. 停止并禁用 4 个服务（`wansel` / `wansel-switchd` / `wansel-egress` / `wansel-egress-watchdog`）
+2. 撤销外部改动：关闭 OpenClash hook（并移除 hook 脚本里的段落）、清理 `/etc/dnsmasq.conf` 的 nftset 标记块
+3. 删除插件文件、菜单、ACL、配置
+4. 重载 rpcd 和 dnsmasq
+
+卸载后需要**重新登录 LuCI** 让菜单变化生效。
+
+> 如果不方便跑脚本，也可以手工执行 README 历史版本里的逐条命令，但要记得停服务 + 关 hook + 清 dnsmasq 标记块，少一步都会留垃圾。
 
 ## 常见问题
-
-**菜单不显示 / 点开 403**
-ACL 未生效。执行 `/etc/init.d/rpcd reload` 并**重新登录** LuCI。
-
-**切换没反应**
-先看 `wansel status`，确认 `wan.up` / `usb.up` 都是 1；再看 `logread | grep wansel`。
 
 **导入配置报权限错误**
 ACL 里 `/tmp/wansel/import.txt` 需要写权限，重载 rpcd 后重新登录。
