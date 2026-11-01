@@ -579,8 +579,15 @@ return view.extend({
 				]);
 				famSel.value = gFam;
 
-				body.appendChild(E('tr', { 'style': 'background:rgba(130,130,130,.08)' }, [
-					E('td', {}, [ E('b', {}, [ '📁 ' + g + '（' + items.length + ' 条）' ]) ]),
+				var childRows = [];
+				var foldIcon = E('span', {
+					'class': 'ws-fold',
+					'style': 'cursor:pointer;display:inline-block;width:16px;color:#888;user-select:none',
+					'title': '折叠 / 展开'
+				}, [ '▼' ]);
+
+				var groupRow = E('tr', { 'style': 'background:rgba(130,130,130,.08)' }, [
+					E('td', {}, [ foldIcon, E('b', {}, [ '📁 ' + g + '（' + items.length + ' 条）' ]) ]),
 					E('td', {}, [ viaSel ]),
 					E('td', {}, [ famSel ]),
 					E('td', {}, [
@@ -588,11 +595,22 @@ return view.extend({
 							return self.handleGroupSet(g, viaSel.value, famSel.value);
 						}) }, [ '应用到组' ])
 					])
-				]));
+				]);
+
+				foldIcon.addEventListener('click', function(ev) {
+					ev.stopPropagation();
+					var hidden = foldIcon.textContent === '▶';
+					foldIcon.textContent = hidden ? '▼' : '▶';
+					childRows.forEach(function(row) {
+						row.style.display = hidden ? '' : 'none';
+					});
+				});
+
+				body.appendChild(groupRow);
 
 				// 子行
 				items.forEach(function(r) {
-					body.appendChild(E('tr', {}, [
+					var row = E('tr', {}, [
 						E('td', { 'style': 'padding-left:28px' }, [
 							E('span', { 'style': 'color:#888;margin-right:6px' }, [ '└' ]),
 							E('span', { 'class': 'wansel-mono' }, [ r.value ]),
@@ -605,16 +623,33 @@ return view.extend({
 							' ',
 							E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(self, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 						])
-					]));
+					]);
+					childRows.push(row);
+					body.appendChild(row);
 				});
 			} else {
 				// 未分组
+				var rawRows = [];
+				var rawIcon = E('span', {
+					'class': 'ws-fold',
+					'style': 'cursor:pointer;display:inline-block;width:16px;color:#888;user-select:none',
+					'title': '折叠 / 展开'
+				}, [ '▼' ]);
+
 				body.appendChild(E('tr', { 'style': 'background:rgba(130,130,130,.05)' }, [
-					E('td', {}, [ E('span', { 'style': 'color:#999' }, [ '（未分组）' ]) ]),
+					E('td', {}, [ rawIcon, E('span', { 'style': 'color:#999' }, [ '（未分组）' ]) ]),
 					E('td', {}), E('td', {}), E('td', {})
 				]));
+
+				rawIcon.addEventListener('click', function(ev) {
+					ev.stopPropagation();
+					var hidden = rawIcon.textContent === '▶';
+					rawIcon.textContent = hidden ? '▼' : '▶';
+					rawRows.forEach(function(row) { row.style.display = hidden ? '' : 'none'; });
+				});
+
 				items.forEach(function(r) {
-					body.appendChild(E('tr', {}, [
+					var row = E('tr', {}, [
 						E('td', { 'style': 'padding-left:28px' }, [
 							E('span', { 'style': 'color:#888;margin-right:6px' }, [ '└' ]),
 							E('span', { 'class': 'wansel-mono' }, [ r.value ])
@@ -626,7 +661,9 @@ return view.extend({
 							' ',
 							E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(self, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 						])
-					]));
+					]);
+					rawRows.push(row);
+					body.appendChild(row);
 				});
 			}
 		});
