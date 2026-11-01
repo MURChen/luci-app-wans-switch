@@ -632,6 +632,7 @@ return view.extend({
 		});
 	},
 
+	handleGroupSet: function(group, via, family) {
 		return fs.exec(EGRESS, [ 'group', 'set', group, via, family ]).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已更新').trim() ]), 'info');
 			return this.refreshRules();
