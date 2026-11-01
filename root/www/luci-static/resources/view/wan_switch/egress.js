@@ -110,7 +110,7 @@ return view.extend({
 				var p = l.split('|');
 				return {
 					proto: p[0], src: p[1], dst: p[2], dport: p[3],
-					bytes: parseInt(p[4]) || 0, via: p[5], domain: p[6] || ''
+					bytes: parseInt(p[4]) || 0, via: p[5]
 				};
 			});
 		}).catch(function() { return []; });
@@ -293,13 +293,12 @@ return view.extend({
 						E('th', {}, [ '协议' ]),
 						E('th', {}, [ '源' ]),
 						E('th', {}, [ '目的' ]),
-						E('th', {}, [ '域名' ]),
 						E('th', {}, [ '端口' ]),
 						E('th', {}, [ '流量' ]),
 						E('th', {}, [ '出口' ])
 					])]),
 					E('tbody', { 'id': 'ws-conn-body' }, [
-						E('tr', {}, [ E('td', { 'colspan': '7', 'class': 'wansel-empty' }, [ '加载中…' ]) ])
+						E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'wansel-empty' }, [ '加载中…' ]) ])
 					])
 				])
 			])
@@ -748,7 +747,6 @@ return view.extend({
 					E('td', {}, [ c.proto ]),
 					E('td', { 'class': 'wansel-mono' }, [ c.src ]),
 					E('td', { 'class': 'wansel-mono' }, [ c.dst ]),
-					E('td', { 'class': 'wansel-mono', 'style': 'color:#2fb344' }, [ c.domain || '' ]),
 					E('td', { 'class': 'wansel-mono' }, [ c.dport ]),
 					E('td', {}, [ fmtBytes(c.bytes) ]),
 					E('td', {}, [ badge(c.via) ])
