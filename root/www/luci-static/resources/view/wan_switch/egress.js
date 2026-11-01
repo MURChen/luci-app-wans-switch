@@ -198,16 +198,14 @@ return view.extend({
 				E('h3', {}, [ '规则列表' ]),
 				E('table', { 'class': 'wansel-table' }, [
 					E('thead', {}, [ E('tr', {}, [
-						E('th', {}, [ '类型' ]),
-						E('th', {}, [ '值' ]),
+						E('th', {}, [ '规则' ]),
 						E('th', {}, [ '出口' ]),
 						E('th', {}, [ '协议' ]),
-						E('th', {}, [ '组' ]),
 						E('th', {}, [ '' ])
 					])]),
-					E('tbody', { 'id': 'ws-rule-body' },
-						rules.length ? rules.map(function(r) { return self.renderRuleRow(r); }) :
-							[ E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]) ])
+					E('tbody', { 'id': 'ws-rule-body' }, [
+						E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有规则' ]) ])
+					])
 				]),
 				E('div', { 'class': 'wansel-form', 'style': 'margin-top:14px' }, [
 					E('select', { 'class': 'wansel-input', 'id': 'ws-type' }, [
@@ -236,24 +234,6 @@ return view.extend({
 				]),
 				E('div', { 'class': 'wansel-hint' }, [
 					'「应用规则」只更新 nft 集合和路由，不重启 DNS；新加的域名要等「应用并重启 DNS」后才会开始解析收集。'
-				])
-			]),
-
-			E('div', { 'class': 'wansel-panel' }, [
-				E('h3', {}, [ '规则组' ]),
-				E('table', { 'class': 'wansel-table' }, [
-					E('thead', {}, [ E('tr', {}, [
-						E('th', {}, [ '组名' ]),
-						E('th', {}, [ '出口' ]),
-						E('th', {}, [ '协议' ]),
-						E('th', {}, [ '' ])
-					])]),
-					E('tbody', { 'id': 'ws-group-body' }, [
-						E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有分组' ]) ])
-					])
-				]),
-				E('div', { 'class': 'wansel-hint' }, [
-					'在规则里填了「组」之后，这里可以按组批量切换出口和协议。'
 				])
 			]),
 
@@ -331,8 +311,8 @@ return view.extend({
 			return self.refreshConnections(root);
 		}, 10);
 
+		this.renderRuleTree(rules);
 		this.refreshConnections(root);
-		this.refreshGroups(rules);
 
 		return root;
 	},
@@ -554,69 +534,104 @@ return view.extend({
 
 	refreshRules: function() {
 		return this.callList().then(function(d) {
-			var body = document.getElementById('ws-rule-body');
-			if (!body) return;
-			while (body.firstChild) body.removeChild(body.firstChild);
-			var rules = d.rules || [];
-			if (!rules.length) {
-				body.appendChild(E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]));
-			} else {
-				for (var i = 0; i < rules.length; i++)
-					body.appendChild(this.renderRuleRow(rules[i]));
-			}
-			return this.refreshGroups(rules);
+			this.renderRuleTree(d.rules || []);
 		}.bind(this));
 	},
 
-	refreshGroups: function(rules) {
-		var body = document.getElementById('ws-group-body');
+	// 树形渲染：组作为父行，组内规则缩进显示
+	renderRuleTree: function(rules) {
+		var self = this;
+		var body = document.getElementById('ws-rule-body');
 		if (!body) return;
-
-		// 从规则里汇总分组
-		var map = {};
-		(rules || []).forEach(function(r) {
-			if (!r.group) return;
-			if (!map[r.group]) map[r.group] = { name: r.group, via: r.via, family: r.family, count: 0 };
-			map[r.group].count++;
-		});
-		var groups = Object.keys(map).map(function(k) { return map[k]; });
-
 		while (body.firstChild) body.removeChild(body.firstChild);
-		if (!groups.length) {
-			body.appendChild(E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有分组' ]) ]));
+
+		if (!rules.length) {
+			body.appendChild(E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]));
 			return;
 		}
 
-		var self = this;
-		groups.forEach(function(g) {
-			var viaSel = E('select', { 'class': 'wansel-input' }, [
-				E('option', { 'value': 'default' }, [ '跟随默认' ]),
-				E('option', { 'value': 'wan' }, [ '宽带' ]),
-				E('option', { 'value': 'usb' }, [ '5G' ])
-			]);
-			viaSel.value = g.via || 'default';
+		var famLabel = { both: 'IPv4+IPv6', ipv4: '仅 IPv4', ipv6: '仅 IPv6' };
 
-			var famSel = E('select', { 'class': 'wansel-input' }, [
-				E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
-				E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
-				E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
-			]);
-			famSel.value = g.family || 'both';
+		// 分组
+		var order = [];
+		var groups = {};
+		rules.forEach(function(r) {
+			var g = r.group || '';
+			if (!groups[g]) { groups[g] = []; order.push(g); }
+			groups[g].push(r);
+		});
 
-			body.appendChild(E('tr', {}, [
-				E('td', {}, [ g.name + '（' + g.count + ' 条）' ]),
-				E('td', {}, [ viaSel ]),
-				E('td', {}, [ famSel ]),
-				E('td', {}, [
-					E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(self, function() {
-						return self.handleGroupSet(g.name, viaSel.value, famSel.value);
-					}) }, [ '应用到组' ])
-				])
-			]));
+		order.forEach(function(g) {
+			var items = groups[g];
+			if (g) {
+				// 组行
+				var gVia = items[0].via, gFam = items[0].family || 'both';
+				var viaSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:100px' }, [
+					E('option', { 'value': 'default' }, [ '跟随默认' ]),
+					E('option', { 'value': 'wan' }, [ '宽带' ]),
+					E('option', { 'value': 'usb' }, [ '5G' ])
+				]);
+				viaSel.value = gVia || 'default';
+				var famSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:120px' }, [
+					E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+					E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+					E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+				]);
+				famSel.value = gFam;
+
+				body.appendChild(E('tr', { 'style': 'background:rgba(130,130,130,.08)' }, [
+					E('td', {}, [ E('b', {}, [ '📁 ' + g + '（' + items.length + ' 条）' ]) ]),
+					E('td', {}, [ viaSel ]),
+					E('td', {}, [ famSel ]),
+					E('td', {}, [
+						E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(self, function() {
+							return self.handleGroupSet(g, viaSel.value, famSel.value);
+						}) }, [ '应用到组' ])
+					])
+				]));
+
+				// 子行
+				items.forEach(function(r) {
+					body.appendChild(E('tr', {}, [
+						E('td', { 'style': 'padding-left:28px' }, [
+							E('span', { 'style': 'color:#888;margin-right:6px' }, [ '└' ]),
+							E('span', { 'class': 'wansel-mono' }, [ r.value ]),
+							E('span', { 'style': 'color:#999;font-size:11px;margin-left:6px' }, [ r.type === 'domain' ? '(域名)' : '(IP)' ])
+						]),
+						E('td', {}, [ badge(r.via) ]),
+						E('td', {}, [ famLabel[r.family] || 'IPv4+IPv6' ]),
+						E('td', { 'style': 'white-space:nowrap' }, [
+							E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(self, function() { return self.handleEdit(r); }) }, [ '编辑' ]),
+							' ',
+							E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(self, function() { return self.handleDel(r.value); }) }, [ '删除' ])
+						])
+					]));
+				});
+			} else {
+				// 未分组
+				body.appendChild(E('tr', { 'style': 'background:rgba(130,130,130,.05)' }, [
+					E('td', {}, [ E('span', { 'style': 'color:#999' }, [ '（未分组）' ]) ]),
+					E('td', {}), E('td', {}), E('td', {})
+				]));
+				items.forEach(function(r) {
+					body.appendChild(E('tr', {}, [
+						E('td', { 'style': 'padding-left:28px' }, [
+							E('span', { 'style': 'color:#888;margin-right:6px' }, [ '└' ]),
+							E('span', { 'class': 'wansel-mono' }, [ r.value ])
+						]),
+						E('td', {}, [ badge(r.via) ]),
+						E('td', {}, [ famLabel[r.family] || 'IPv4+IPv6' ]),
+						E('td', { 'style': 'white-space:nowrap' }, [
+							E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(self, function() { return self.handleEdit(r); }) }, [ '编辑' ]),
+							' ',
+							E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(self, function() { return self.handleDel(r.value); }) }, [ '删除' ])
+						])
+					]));
+				});
+			}
 		});
 	},
 
-	handleGroupSet: function(group, via, family) {
 		return fs.exec(EGRESS, [ 'group', 'set', group, via, family ]).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已更新').trim() ]), 'info');
 			return this.refreshRules();
