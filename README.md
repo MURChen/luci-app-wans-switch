@@ -143,6 +143,24 @@ OpenClash 每次重载防火墙都会重建 `inet fw4` 表，`nft set` 和 mark 
 > dnsmasq 的按域名 `filter-AAAA` 在部分固件构建里没有编译进去（会报 `extraneous parameter`，导致 dnsmasq 无法启动），所以插件不写入该选项。
 > 如果需要让某个域名只解析 IPv4，建议在 LuCI 的「DHCP/DNS → 过滤 AAAA」里做全局设置，或者用 IP 规则直接锁定。
 
+### 规则组
+
+每条规则可以带一个「组」名。用途：
+
+- 从 URL 或内置预设导入时指定组名，整批规则归到同一组
+- 规则列表里可以**单条编辑**（类型 / 值 / 出口 / 协议 / 组）
+- 「规则组」面板里可以**按组批量切换出口和协议**
+
+```
+规则列表
+类型  值              出口   协议        组         操作
+域名  music.126.net   宽带   IPv4+IPv6   netease   [编辑][删除]
+
+规则组
+组名              出口    协议        操作
+netease（7 条）   [宽带]  [IPv4+IPv6] [应用到组]
+```
+
 ### 从 URL 拉取规则
 
 页面上的「从url拉取规则」支持两种来源：
@@ -201,6 +219,10 @@ wansel-egress status                                          # 状态（JSON，
 wansel-egress connections [all|wan|usb|default|matched] [nodns,nolan]  # 连接列表
 wansel-egress preset list                                     # 列出内置预设
 wansel-egress preset apply netease wan both                   # 应用内置预设
+wansel-egress edit <old> domain <new> wan both [group]        # 编辑单条规则
+wansel-egress group list                                      # 列出规则组
+wansel-egress group set <group> <via> [family]                # 按组批量改出口
+wansel-egress group rename <old> <new>                        # 重命名组
 wansel-egress fetch <url>                                     # 下载并预览规则（JSON）
 wansel-egress import <url> wan both                           # 下载并导入规则
 wansel-egress hook on|off                                     # OpenClash hook 开关
