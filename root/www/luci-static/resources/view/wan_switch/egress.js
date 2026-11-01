@@ -142,14 +142,14 @@ return view.extend({
 							[ '命中: ' + (st.usb_counter || '0 0') ])
 					]),
 					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '宽带 IP 数' ]),
+						E('div', { 'class': 'wansel-stat-label' }, [ '宽带 IP 数 (v4/v6)' ]),
 						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-wan-count' },
-							[ String(st.wan_count || 0) ])
+							[ String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0) ])
 					]),
 					E('div', { 'class': 'wansel-stat-card' }, [
-						E('div', { 'class': 'wansel-stat-label' }, [ '5G IP 数' ]),
+						E('div', { 'class': 'wansel-stat-label' }, [ '5G IP 数 (v4/v6)' ]),
 						E('div', { 'class': 'wansel-stat-value', 'id': 'ws-usb-count' },
-							[ String(st.usb_count || 0) ])
+							[ String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0) ])
 					])
 				])
 			]),
@@ -161,11 +161,12 @@ return view.extend({
 						E('th', {}, [ '类型' ]),
 						E('th', {}, [ '值' ]),
 						E('th', {}, [ '出口' ]),
+						E('th', {}, [ '协议' ]),
 						E('th', {}, [ '' ])
 					])]),
 					E('tbody', { 'id': 'ws-rule-body' },
 						rules.length ? rules.map(function(r) { return self.renderRuleRow(r); }) :
-							[ E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]) ])
+							[ E('tr', {}, [ E('td', { 'colspan': '5', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]) ])
 				]),
 				E('div', { 'class': 'wansel-form', 'style': 'margin-top:14px' }, [
 					E('select', { 'class': 'wansel-input', 'id': 'ws-type' }, [
@@ -178,7 +179,15 @@ return view.extend({
 						E('option', { 'value': 'wan' }, [ '宽带' ]),
 						E('option', { 'value': 'usb' }, [ '5G' ])
 					]),
+					E('select', { 'class': 'wansel-input', 'id': 'ws-family' }, [
+						E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+					]),
 					E('button', { 'class': 'btn cbi-button cbi-button-add', 'click': ui.createHandlerFn(this, function() { return self.handleAdd(); }) }, [ '添加' ])
+				]),
+				E('div', { 'class': 'wansel-hint' }, [
+					'「仅 IPv4」会让 dnsmasq 过滤该域名的 AAAA 记录，强制只解析 IPv4。'
 				]),
 				E('div', { 'class': 'wansel-actions' }, [
 					E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(this, function() { return self.handleApply(false); }) }, [ '应用规则' ]),
@@ -262,10 +271,12 @@ return view.extend({
 
 	renderRuleRow: function(r) {
 		var self = this;
+		var famLabel = { both: 'IPv4+IPv6', ipv4: '仅 IPv4', ipv6: '仅 IPv6' };
 		return E('tr', { 'data-value': r.value }, [
 			E('td', {}, [ r.type === 'domain' ? '域名' : 'IP' ]),
 			E('td', { 'class': 'wansel-mono' }, [ r.value ]),
 			E('td', {}, [ badge(r.via) ]),
+			E('td', {}, [ famLabel[r.family] || 'IPv4+IPv6' ]),
 			E('td', {}, [
 				E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(this, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 			])
@@ -276,13 +287,16 @@ return view.extend({
 		var type = document.getElementById('ws-type').value;
 		var value = (document.getElementById('ws-value').value || '').trim();
 		var via = document.getElementById('ws-via').value;
+		var famEl = document.getElementById('ws-family');
+		var family = famEl ? famEl.value : 'both';
 
 		if (!value) {
 			ui.addNotification(null, E('p', {}, [ '请输入域名或 IP' ]), 'warning');
 			return;
 		}
 
-		return fs.exec(EGRESS, [ 'add', type, value, via ]).then(function(r) {
+		var args = [ 'add', type, value, via, family ];
+		return fs.exec(EGRESS, args).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已添加').trim() ]), 'info');
 			return this.refreshRules();
 		}.bind(this));
@@ -347,8 +361,8 @@ return view.extend({
 			set('ws-usb-ip', st.usb_up === true ? '在线' : '离线');
 			set('ws-wan-counter', '命中: ' + (st.wan_counter || '0 0'));
 			set('ws-usb-counter', '命中: ' + (st.usb_counter || '0 0'));
-			set('ws-wan-count', String(st.wan_count || 0));
-			set('ws-usb-count', String(st.usb_count || 0));
+			set('ws-wan-count', String(st.wan_count || 0) + ' / ' + String(st.wan_count6 || 0));
+			set('ws-usb-count', String(st.usb_count || 0) + ' / ' + String(st.usb_count6 || 0));
 
 			var hook = document.getElementById('ws-hook');
 			if (hook) hook.checked = String(st.openclash_hook) === '1';

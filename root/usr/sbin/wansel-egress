@@ -1,12 +1,12 @@
 #!/bin/sh
-# wansel-egress - 按域名/IP 指定出口
+# wansel-egress - 按域名/IP 指定出口与协议族（IPv4 / IPv6）
 # 用法:
 #   wansel-egress list
-#   wansel-egress add <domain|ip> <value> <default|wan|usb>
+#   wansel-egress add <domain|ip> <value> <default|wan|usb> [both|ipv4|ipv6]
 #   wansel-egress del <value>
 #   wansel-egress apply [dns]
 #   wansel-egress status
-#   wansel-egress connections [all|wan|usb|default]
+#   wansel-egress connections [all|wan|usb|default|matched]
 #   wansel-egress hook on|off
 #   wansel-egress cleanup
 
@@ -21,6 +21,8 @@ DNS_MARK_END="# <<< wansel-egress nftset <<<"
 
 WAN_SET="wansel_wan_v4"
 USB_SET="wansel_usb_v4"
+WAN_SET6="wansel_wan_v6"
+USB_SET6="wansel_usb_v6"
 WAN_MARK="0x100"
 USB_MARK="0x101"
 WAN_TABLE="100"
@@ -30,9 +32,8 @@ USB_PREF="1010"
 
 log() { logger -t wansel-egress "$*" 2>/dev/null; }
 
-wan_gateway() {
-	ip -4 route show default dev eth0 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
-}
+# ---------- 接口解析 ----------
+wan_dev() { echo "eth0"; }
 
 usb_dev() {
 	local d
@@ -42,11 +43,15 @@ usb_dev() {
 	echo "$d"
 }
 
-usb_gateway() {
-	local dev=$(usb_dev)
-	ip -4 route show default dev "$dev" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
+gw_v4() {
+	ip -4 route show default dev "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
 }
 
+gw_v6() {
+	ip -6 route show default dev "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
+}
+
+# ---------- 规则读写 ----------
 list_rules_json() {
 	local first=1
 	echo -n '{"rules":['
@@ -56,22 +61,28 @@ list_rules_json() {
 }
 
 _emit_rule() {
-	local section="$1" type value via
+	local section="$1" type value via family
 	config_get type "$section" "type" ""
 	config_get value "$section" "value" ""
 	config_get via "$section" "via" "default"
+	config_get family "$section" "family" "both"
 	[ -n "$value" ] || return 0
 	[ "$first" = "1" ] || echo -n ','
 	first=0
-	printf '{"id":"%s","type":"%s","value":"%s","via":"%s"}' "$section" "$type" "$value" "$via"
+	printf '{"id":"%s","type":"%s","value":"%s","via":"%s","family":"%s"}' \
+		"$section" "$type" "$value" "$via" "$family"
 }
 
 rule_add() {
-	local type="$1" value="$2" via="$3"
+	local type="$1" value="$2" via="$3" family="${4:-both}"
 	[ -n "$type" ] && [ -n "$value" ] || { echo "参数不足"; return 1; }
 	case "$via" in
 		default|wan|usb) ;;
 		*) echo "出口必须是 default/wan/usb"; return 1 ;;
+	esac
+	case "$family" in
+		both|ipv4|ipv6) ;;
+		*) family="both" ;;
 	esac
 	local dup_match=""
 	config_load "$CFG"
@@ -84,8 +95,9 @@ rule_add() {
 	config_foreach _dup_check rule
 	if [ -n "$dup_match" ]; then
 		uci set "$CFG.$dup_match.via=$via"
+		uci set "$CFG.$dup_match.family=$family"
 		uci commit "$CFG"
-		echo "已更新: $value -> $via"
+		echo "已更新: $value -> $via ($family)"
 		return 0
 	fi
 	local section
@@ -94,8 +106,9 @@ rule_add() {
 	uci set "$CFG.$section.type=$type"
 	uci set "$CFG.$section.value=$value"
 	uci set "$CFG.$section.via=$via"
+	uci set "$CFG.$section.family=$family"
 	uci commit "$CFG"
-	echo "已添加: $value -> $via"
+	echo "已添加: $value -> $via ($family)"
 }
 
 rule_del() {
@@ -116,23 +129,53 @@ rule_del() {
 	echo "已删除: $target"
 }
 
+# ---------- nft ----------
 need_fw4_table() { nft list table inet fw4 >/dev/null 2>&1; }
 
 ensure_set() {
-	nft list set inet fw4 "$1" >/dev/null 2>&1 || \
-		nft add set inet fw4 "$1" "{ type ipv4_addr; flags interval; }" 2>/dev/null
+	local set="$1" fam="$2"
+	nft list set inet fw4 "$set" >/dev/null 2>&1 && return 0
+	if [ "$fam" = "v6" ]; then
+		nft add set inet fw4 "$set" "{ type ipv6_addr; flags interval; }" 2>/dev/null
+	else
+		nft add set inet fw4 "$set" "{ type ipv4_addr; flags interval; }" 2>/dev/null
+	fi
 }
 
 flush_set() { nft flush set inet fw4 "$1" 2>/dev/null; }
-add_set_element() { nft add element inet fw4 "$1" "{ $2 }" 2>/dev/null; }
-set_count() { nft list set inet fw4 "$1" 2>/dev/null | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | wc -l; }
 
-ensure_route_table() {
-	[ -n "$2" ] || return 1
+add_set_element() {
+	nft add element inet fw4 "$1" "{ $2 }" 2>/dev/null
+}
+
+set_count() {
+	local body
+	body=$(nft list set inet fw4 "$1" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}')
+	[ -n "$body" ] || { echo 0; return; }
+	echo "$body" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -c .
+}
+
+set_elements() {
+	nft list set inet fw4 "$1" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | tr '\n' ' '
+}
+
+# ---------- ip rule / 路由表 ----------
+ensure_route_v4() {
+	[ -n "$2" ] && [ -n "$3" ] || return 1
 	ip route replace default via "$2" dev "$3" table "$1" 2>/dev/null
 }
 
-ensure_ip_rule() {
+ensure_route_v6() {
+	local dev="$3"
+	[ -n "$dev" ] || return 1
+	if [ -n "$2" ]; then
+		ip -6 route replace default via "$2" dev "$dev" table "$1" 2>/dev/null
+	else
+		ip -6 route replace default dev "$dev" table "$1" 2>/dev/null
+	fi
+}
+
+ensure_rule_v4() {
 	local mark="$1" table="$2" pref="$3"
 	ip rule show 2>/dev/null | grep -q "fwmark $mark lookup $table" && return 0
 	ip rule add fwmark "$mark" table "$table" pref "$pref" 2>/dev/null && return 0
@@ -144,10 +187,20 @@ ensure_ip_rule() {
 	return 1
 }
 
-remove_ip_rule() {
-	local mark="$1" table="$2"
-	ip rule show 2>/dev/null | grep "fwmark $mark lookup $table" >/dev/null || return 0
-	local p=980
+ensure_rule_v6() {
+	local mark="$1" table="$2" pref="$3"
+	ip -6 rule show 2>/dev/null | grep -q "fwmark $mark lookup $table" && return 0
+	ip -6 rule add fwmark "$mark" table "$table" pref "$pref" 2>/dev/null && return 0
+	local p=$((pref + 1))
+	while [ $p -lt $((pref + 20)) ]; do
+		ip -6 rule add fwmark "$mark" table "$table" pref "$p" 2>/dev/null && return 0
+		p=$((p+1))
+	done
+	return 1
+}
+
+remove_rule_v4() {
+	local mark="$1" table="$2" p=980
 	while [ $p -lt 1100 ]; do
 		ip rule del fwmark "$mark" table "$table" pref "$p" 2>/dev/null
 		p=$((p+1))
@@ -155,21 +208,40 @@ remove_ip_rule() {
 	ip rule del fwmark "$mark" table "$table" 2>/dev/null
 }
 
+remove_rule_v6() {
+	local mark="$1" table="$2" p=980
+	while [ $p -lt 1100 ]; do
+		ip -6 rule del fwmark "$mark" table "$table" pref "$p" 2>/dev/null
+		p=$((p+1))
+	done
+	ip -6 rule del fwmark "$mark" table "$table" 2>/dev/null
+}
+
+# ---------- mark 规则 ----------
+ensure_mangle_chain() {
+	nft list chain inet fw4 mangle_prerouting >/dev/null 2>&1 && return 0
+	nft add chain inet fw4 mangle_prerouting '{ type filter hook prerouting priority mangle; policy accept; }' 2>/dev/null
+}
+
 rebuild_mark_rules() {
-	if ! nft list chain inet fw4 mangle_prerouting >/dev/null 2>&1; then
-		nft add chain inet fw4 mangle_prerouting '{ type filter hook prerouting priority mangle; policy accept; }' 2>/dev/null
-	fi
+	ensure_mangle_chain
 	nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | \
 		grep -E "wansel-(wan|usb)-mark" | \
 		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
 		while read -r h; do nft delete rule inet fw4 mangle_prerouting handle "$h" 2>/dev/null; done
 
-	ensure_set "$WAN_SET"
-	ensure_set "$USB_SET"
+	ensure_set "$WAN_SET" v4
+	ensure_set "$USB_SET" v4
+	ensure_set "$WAN_SET6" v6
+	ensure_set "$USB_SET6" v6
+
 	nft add rule inet fw4 mangle_prerouting ip daddr @$WAN_SET meta mark set $WAN_MARK ct mark set $WAN_MARK counter comment "wansel-wan-mark" 2>/dev/null
 	nft add rule inet fw4 mangle_prerouting ip daddr @$USB_SET meta mark set $USB_MARK ct mark set $USB_MARK counter comment "wansel-usb-mark" 2>/dev/null
+	nft add rule inet fw4 mangle_prerouting ip6 daddr @$WAN_SET6 meta mark set $WAN_MARK ct mark set $WAN_MARK counter comment "wansel-wan-mark-v6" 2>/dev/null
+	nft add rule inet fw4 mangle_prerouting ip6 daddr @$USB_SET6 meta mark set $USB_MARK ct mark set $USB_MARK counter comment "wansel-usb-mark-v6" 2>/dev/null
 }
 
+# ---------- dnsmasq nftset + AAAA 过滤 ----------
 rebuild_dnsmasq_nftset() {
 	local tmp="/tmp/wansel-egress.dns.$$"
 	awk -v b="$DNS_MARK_BEGIN" -v e="$DNS_MARK_END" '
@@ -182,13 +254,25 @@ rebuild_dnsmasq_nftset() {
 		echo "$DNS_MARK_BEGIN"
 		config_load "$CFG"
 		_gen_dns_line() {
-			local s="$1" type value via
+			local s="$1" type value via family
 			config_get type "$s" "type" ""
 			config_get value "$s" "value" ""
 			config_get via "$s" "via" "default"
+			config_get family "$s" "family" "both"
 			[ "$type" = "domain" ] || return 0
-			[ "$via" = "wan" ] && echo "nftset=/$value/4#inet#fw4#$WAN_SET"
-			[ "$via" = "usb" ] && echo "nftset=/$value/4#inet#fw4#$USB_SET"
+			[ "$via" = "default" ] && return 0
+
+
+			case "$via" in
+				wan)
+					[ "$family" != "ipv6" ] && echo "nftset=/$value/4#inet#fw4#$WAN_SET"
+					[ "$family" != "ipv4" ] && echo "nftset=/$value/6#inet#fw4#$WAN_SET6"
+					;;
+				usb)
+					[ "$family" != "ipv6" ] && echo "nftset=/$value/4#inet#fw4#$USB_SET"
+					[ "$family" != "ipv4" ] && echo "nftset=/$value/6#inet#fw4#$USB_SET6"
+					;;
+			esac
 		}
 		config_foreach _gen_dns_line rule
 		echo "$DNS_MARK_END"
@@ -197,6 +281,7 @@ rebuild_dnsmasq_nftset() {
 	mv "$tmp" "$DNSMASQ_CONF"
 }
 
+# ---------- IP 规则入 set ----------
 apply_ip_rules() {
 	config_load "$CFG"
 	_apply_ip() {
@@ -205,39 +290,59 @@ apply_ip_rules() {
 		config_get value "$s" "value" ""
 		config_get via "$s" "via" "default"
 		[ "$type" = "ip" ] || return 0
-		case "$via" in
-			wan) add_set_element "$WAN_SET" "$value" ;;
-			usb) add_set_element "$USB_SET" "$value" ;;
-		esac
+		[ "$via" = "default" ] && return 0
+		if echo "$value" | grep -q ':'; then
+			[ "$via" = "wan" ] && add_set_element "$WAN_SET6" "$value"
+			[ "$via" = "usb" ] && add_set_element "$USB_SET6" "$value"
+		else
+			[ "$via" = "wan" ] && add_set_element "$WAN_SET" "$value"
+			[ "$via" = "usb" ] && add_set_element "$USB_SET" "$value"
+		fi
 	}
 	config_foreach _apply_ip rule
 }
 
+# ---------- apply ----------
 do_apply() {
 	local with_dns="$1"
 	mkdir -p "$STATE_DIR"
 
 	need_fw4_table || { echo "fw4 表不存在，无法应用"; return 1; }
 
-	ensure_set "$WAN_SET"
-	ensure_set "$USB_SET"
+	ensure_set "$WAN_SET" v4
+	ensure_set "$USB_SET" v4
+	ensure_set "$WAN_SET6" v6
+	ensure_set "$USB_SET6" v6
 	flush_set "$WAN_SET"
 	flush_set "$USB_SET"
+	flush_set "$WAN_SET6"
+	flush_set "$USB_SET6"
 
 	apply_ip_rules
 
-	local wgw ugw udev
-	wgw=$(wan_gateway)
+	local wdev udev wgw4 ugw4 wgw6 ugw6
+	wdev=$(wan_dev)
 	udev=$(usb_dev)
-	ugw=$(usb_gateway)
+	wgw4=$(gw_v4 "$wdev")
+	ugw4=$(gw_v4 "$udev")
+	wgw6=$(gw_v6 "$wdev")
+	ugw6=$(gw_v6 "$udev")
 
-	if [ -n "$wgw" ]; then
-		ensure_route_table "$WAN_TABLE" "$wgw" eth0
-		ensure_ip_rule "$WAN_MARK" "$WAN_TABLE" "$WAN_PREF"
+	if [ -n "$wgw4" ]; then
+		ensure_route_v4 "$WAN_TABLE" "$wgw4" "$wdev"
+		ensure_rule_v4 "$WAN_MARK" "$WAN_TABLE" "$WAN_PREF"
 	fi
-	if [ -n "$ugw" ]; then
-		ensure_route_table "$USB_TABLE" "$ugw" "$udev"
-		ensure_ip_rule "$USB_MARK" "$USB_TABLE" "$USB_PREF"
+	if [ -n "$ugw4" ]; then
+		ensure_route_v4 "$USB_TABLE" "$ugw4" "$udev"
+		ensure_rule_v4 "$USB_MARK" "$USB_TABLE" "$USB_PREF"
+	fi
+	if ip -6 route show default dev "$wdev" 2>/dev/null | grep -q .; then
+		ensure_route_v6 "$WAN_TABLE" "$wgw6" "$wdev"
+		ensure_rule_v6 "$WAN_MARK" "$WAN_TABLE" "$WAN_PREF"
+	fi
+	if ip -6 route show default dev "$udev" 2>/dev/null | grep -q .; then
+		ensure_route_v6 "$USB_TABLE" "$ugw6" "$udev"
+		ensure_rule_v6 "$USB_MARK" "$USB_TABLE" "$USB_PREF"
 	fi
 
 	rebuild_mark_rules
@@ -252,12 +357,15 @@ do_apply() {
 	echo "已应用规则"
 }
 
+# ---------- status ----------
 do_status() {
-	local wcount ucount wcounter ucounter applied hook wan_up usb_up
+	local wcount ucount wcount6 ucount6 wcounter ucounter applied hook wan_up usb_up v6_on
 	wcount=$(set_count "$WAN_SET")
 	ucount=$(set_count "$USB_SET")
-	wcounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep "wansel-wan-mark" | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
-	ucounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep "wansel-usb-mark" | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
+	wcount6=$(set_count "$WAN_SET6")
+	ucount6=$(set_count "$USB_SET6")
+	wcounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep 'wansel-wan-mark"' | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
+	ucounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep 'wansel-usb-mark"' | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
 
 	applied="0"
 	[ -f "$STATE_DIR/applied" ] && applied=$(cat "$STATE_DIR/applied")
@@ -268,22 +376,33 @@ do_status() {
 
 	wan_up="false"
 	usb_up="false"
-	[ -n "$(wan_gateway)" ] && wan_up="true"
-	[ -n "$(usb_gateway)" ] && usb_up="true"
+	[ -n "$(gw_v4 "$(wan_dev)")" ] && wan_up="true"
+	[ -n "$(gw_v4 "$(usb_dev)")" ] && usb_up="true"
 
-	printf '{"applied":%s,"openclash_hook":%s,"wan_up":%s,"usb_up":%s,"wan_count":%s,"usb_count":%s,"wan_counter":"%s","usb_counter":"%s"}\n' \
-		"$applied" "$hook" "$wan_up" "$usb_up" "${wcount:-0}" "${ucount:-0}" "${wcounter:-0 0}" "${ucounter:-0 0}"
+	v6_on="false"
+	sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -q '^0$' && v6_on="true"
+
+	printf '{"applied":%s,"openclash_hook":%s,"wan_up":%s,"usb_up":%s,"ipv6_enabled":%s,"wan_count":%s,"usb_count":%s,"wan_count6":%s,"usb_count6":%s,"wan_counter":"%s","usb_counter":"%s"}\n' \
+		"$applied" "$hook" "$wan_up" "$usb_up" "$v6_on" "${wcount:-0}" "${ucount:-0}" "${wcount6:-0}" "${ucount6:-0}" "${wcounter:-0 0}" "${ucounter:-0 0}"
 }
 
-
-
+# ---------- connections ----------
 do_connections() {
-	local filter="$1"
-	local wan_ips usb_ips
-	wan_ips=$(nft list set inet fw4 "$WAN_SET" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | tr '\n' ' ')
-	usb_ips=$(nft list set inet fw4 "$USB_SET" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | tr '\n' ' ')
+	local filter="$1" wan_ips usb_ips
+	wan_ips="$(set_elements "$WAN_SET") $(set_elements "$WAN_SET6")"
+	usb_ips="$(set_elements "$USB_SET") $(set_elements "$USB_SET6")"
 
 	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" '
+		function is_priv(ip) {
+			if (ip ~ /^10\./) return 1
+			if (ip ~ /^192\.168\./) return 1
+			if (ip ~ /^172\.(1[6-9]|2[0-9]|3[01])\./) return 1
+			if (ip ~ /^127\./) return 1
+			if (ip ~ /^fe80:/) return 1
+			if (ip ~ /^f[cd][0-9a-f][0-9a-f]:/) return 1
+			if (ip == "::1") return 1
+			return 0
+		}
 		/^(tcp|udp)/ {
 			mark="0"; bytes=0; src=""; dst=""; dport=""
 			for (i = 1; i <= NF; i++) {
@@ -293,6 +412,10 @@ do_connections() {
 				if (dst == "" && $i ~ /^dst=/) { split($i, d, "="); dst = d[2] }
 				if (dport == "" && $i ~ /^dport=/) { split($i, p, "="); dport = p[2] }
 			}
+			# 过滤 DNS 查询
+			if (dport == "53") next
+			# 过滤内网互访
+			if (is_priv(src) && is_priv(dst)) next
 			out = "default"
 			if (mark == "256" || mark == "0x100") out = "wan"
 			else if (mark == "257" || mark == "0x101") out = "usb"
@@ -304,6 +427,8 @@ do_connections() {
 		}
 	' | head -200
 }
+
+# ---------- hook ----------
 do_hook() {
 	local mode="$1"
 	local hook_script="/etc/openclash/custom/openclash_custom_firewall_rules.sh"
@@ -353,17 +478,24 @@ do_hook() {
 	esac
 }
 
+# ---------- cleanup ----------
 do_cleanup() {
 	flush_set "$WAN_SET"
 	flush_set "$USB_SET"
-	remove_ip_rule "$WAN_MARK" "$WAN_TABLE"
-	remove_ip_rule "$USB_MARK" "$USB_TABLE"
+	flush_set "$WAN_SET6"
+	flush_set "$USB_SET6"
+	remove_rule_v4 "$WAN_MARK" "$WAN_TABLE"
+	remove_rule_v4 "$USB_MARK" "$USB_TABLE"
+	remove_rule_v6 "$WAN_MARK" "$WAN_TABLE"
+	remove_rule_v6 "$USB_MARK" "$USB_TABLE"
 	nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | \
 		grep -E "wansel-(wan|usb)-mark" | \
 		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
 		while read -r h; do nft delete rule inet fw4 mangle_prerouting handle "$h" 2>/dev/null; done
 	ip route flush table "$WAN_TABLE" 2>/dev/null
 	ip route flush table "$USB_TABLE" 2>/dev/null
+	ip -6 route flush table "$WAN_TABLE" 2>/dev/null
+	ip -6 route flush table "$USB_TABLE" 2>/dev/null
 	echo "已清理"
 }
 
