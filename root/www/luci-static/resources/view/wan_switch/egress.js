@@ -101,8 +101,8 @@ return view.extend({
 		}).catch(function() { return {}; });
 	},
 
-	callConnections: function(filter) {
-		return fs.exec(EGRESS, [ 'connections', filter || 'all' ]).then(function(r) {
+	callConnections: function(filter, flags) {
+		return fs.exec(EGRESS, [ 'connections', filter || 'all', flags || '' ]).then(function(r) {
 			var lines = (r.stdout || '').split('\n').filter(function(l) { return l.trim(); });
 			return lines.map(function(l) {
 				var p = l.split('|');
@@ -155,10 +155,25 @@ return view.extend({
 			]),
 
 			E('div', { 'class': 'wansel-panel' }, [
-				E('h3', {}, [ '快速填充' ]),
+				E('h3', {}, [ '从url拉取规则' ]),
 				E('div', { 'class': 'wansel-form' }, [
+					E('input', { 'class': 'wansel-input', 'id': 'ws-url', 'placeholder': 'https://raw.githubusercontent.com/user/repo/main/rules.txt', 'style': 'flex:3;min-width:260px' }),
+					E('select', { 'class': 'wansel-input', 'id': 'ws-url-via', 'style': 'flex:1;min-width:110px' }, [
+						E('option', { 'value': 'wan' }, [ '宽带' ]),
+						E('option', { 'value': 'usb' }, [ '5G' ]),
+						E('option', { 'value': 'default' }, [ '跟随默认' ])
+					]),
+					E('select', { 'class': 'wansel-input', 'id': 'ws-url-family', 'style': 'flex:1;min-width:130px' }, [
+						E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+					]),
+					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handleFetch(); }) }, [ '预览' ]),
+					E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(this, function() { return self.handleImportUrl(); }) }, [ '导入' ])
+				]),
+				E('div', { 'class': 'wansel-form', 'style': 'margin-top:10px' }, [
 					E('select', { 'class': 'wansel-input', 'id': 'ws-preset', 'style': 'flex:1;min-width:160px' }, [
-						E('option', { 'value': 'netease' }, [ '网易云音乐' ])
+						E('option', { 'value': 'netease' }, [ '内置：网易云音乐' ])
 					]),
 					E('select', { 'class': 'wansel-input', 'id': 'ws-preset-via', 'style': 'flex:1;min-width:110px' }, [
 						E('option', { 'value': 'wan' }, [ '宽带' ]),
@@ -170,10 +185,10 @@ return view.extend({
 						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
 						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
 					]),
-					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handlePreset(); }) }, [ '一键填充' ])
+					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handlePreset(); }) }, [ '填充预设' ])
 				]),
 				E('div', { 'class': 'wansel-hint' }, [
-					'填充后只是写入规则，还需要点下面的「应用并重启 DNS」才会生效。'
+					'规则文件格式：每行一条，支持 `domain xxx`、`ip xxx`、纯域名/IP，也兼容 Clash 的 `DOMAIN-SUFFIX,xxx` / `IP-CIDR,xxx`；`#` 开头为注释。拉取后只是写入规则，还需要点「应用并重启 DNS」才会生效。'
 				])
 			]),
 
@@ -243,7 +258,7 @@ return view.extend({
 			]),
 
 			E('div', { 'class': 'wansel-panel' }, [
-				E('h3', {}, [ '流量出口' ]),
+				E('h3', {}, [ '流量列表' ]),
 				E('div', { 'class': 'wansel-form' }, [
 					E('select', { 'class': 'wansel-input', 'id': 'ws-filter', 'change': ui.createHandlerFn(this, function() { return self.refreshConnections(); }) }, [
 						E('option', { 'value': 'all' }, [ '全部连接' ]),
@@ -251,6 +266,14 @@ return view.extend({
 						E('option', { 'value': 'usb' }, [ '只看 5G' ]),
 						E('option', { 'value': 'default' }, [ '只看跟随默认' ]),
 						E('option', { 'value': 'matched' }, [ '只看规则命中' ])
+					]),
+					E('label', { 'style': 'display:inline-flex;align-items:center;gap:4px;font-size:13px' }, [
+						E('input', { 'type': 'checkbox', 'id': 'ws-hide-dns', 'checked': true, 'change': ui.createHandlerFn(this, function() { return self.refreshConnections(); }) }),
+						'排除 DNS'
+					]),
+					E('label', { 'style': 'display:inline-flex;align-items:center;gap:4px;font-size:13px' }, [
+						E('input', { 'type': 'checkbox', 'id': 'ws-hide-lan', 'checked': true, 'change': ui.createHandlerFn(this, function() { return self.refreshConnections(); }) }),
+						'排除内网'
 					]),
 					E('span', { 'class': 'wansel-hint', 'id': 'ws-conn-count', 'style': 'margin-top:0' }, [ '' ])
 				]),
@@ -304,6 +327,76 @@ return view.extend({
 				E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(this, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 			])
 		]);
+	},
+
+	handleFetch: function() {
+		var url = (document.getElementById('ws-url').value || '').trim();
+		if (!url) {
+			ui.addNotification(null, E('p', {}, [ '请输入规则文件 URL' ]), 'warning');
+			return;
+		}
+		ui.showModal('拉取规则', [
+			E('p', { 'class': 'spinning' }, [ '正在下载并解析…' ])
+		]);
+
+		return fs.exec(EGRESS, [ 'fetch', url ]).then(function(r) {
+			ui.hideModal();
+			var data;
+			try { data = JSON.parse(r.stdout || '{}'); }
+			catch (e) { data = { ok: false, error: '返回内容不是合法 JSON' }; }
+
+			if (!data.ok) {
+				ui.addNotification(null, E('p', {}, [ '拉取失败: ' + (data.error || '未知错误') ]), 'danger');
+				return;
+			}
+
+			var rows = (data.items || []).slice(0, 30).map(function(it) {
+				return E('tr', {}, [
+					E('td', {}, [ it.type === 'domain' ? '域名' : 'IP' ]),
+					E('td', { 'class': 'wansel-mono' }, [ it.value ])
+				]);
+			});
+
+			ui.showModal('解析结果', [
+				E('p', {}, [ '共解析到 ' + data.count + ' 条规则' + (data.count > 30 ? '（仅显示前 30 条）' : '') ]),
+				E('table', { 'class': 'wansel-table' }, [
+					E('thead', {}, [ E('tr', {}, [ E('th', {}, [ '类型' ]), E('th', {}, [ '值' ]) ]) ]),
+					E('tbody', {}, rows)
+				]),
+				E('div', { 'class': 'right' }, [
+					E('button', { 'class': 'btn', 'click': ui.hideModal }, [ '关闭' ])
+				])
+			]);
+		}).catch(function(e) {
+			ui.hideModal();
+			ui.addNotification(null, E('p', {}, [ '拉取失败: ' + e ]), 'danger');
+		});
+	},
+
+	handleImportUrl: function() {
+		var url = (document.getElementById('ws-url').value || '').trim();
+		var via = document.getElementById('ws-url-via').value;
+		var family = document.getElementById('ws-url-family').value;
+
+		if (!url) {
+			ui.addNotification(null, E('p', {}, [ '请输入规则文件 URL' ]), 'warning');
+			return;
+		}
+		if (!confirm('将从该 URL 导入规则到「' + via + '」，确认？'))
+			return;
+
+		ui.showModal('导入规则', [
+			E('p', { 'class': 'spinning' }, [ '正在导入…' ])
+		]);
+
+		return fs.exec(EGRESS, [ 'import', url, via, family ]).then(function(r) {
+			ui.hideModal();
+			ui.addNotification(null, E('p', {}, [ (r.stdout || '已导入').trim() ]), 'info');
+			return this.refreshRules();
+		}.bind(this)).catch(function(e) {
+			ui.hideModal();
+			ui.addNotification(null, E('p', {}, [ '导入失败: ' + e ]), 'danger');
+		});
 	},
 
 	handlePreset: function() {
@@ -408,7 +501,12 @@ return view.extend({
 	refreshConnections: function(root) {
 		var sel = document.getElementById('ws-filter');
 		var filter = sel ? sel.value : 'all';
-		return this.callConnections(filter).then(function(list) {
+		var dnsEl = document.getElementById('ws-hide-dns');
+		var lanEl = document.getElementById('ws-hide-lan');
+		var flags = [];
+		if (dnsEl && dnsEl.checked) flags.push('nodns');
+		if (lanEl && lanEl.checked) flags.push('nolan');
+		return this.callConnections(filter, flags.join(',')).then(function(list) {
 			var body = document.getElementById('ws-conn-body');
 			if (!body) return;
 			while (body.firstChild) body.removeChild(body.firstChild);

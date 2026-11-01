@@ -388,11 +388,11 @@ do_status() {
 
 # ---------- connections ----------
 do_connections() {
-	local filter="$1" wan_ips usb_ips
+	local filter="$1" flags="$2" wan_ips usb_ips
 	wan_ips="$(set_elements "$WAN_SET") $(set_elements "$WAN_SET6")"
 	usb_ips="$(set_elements "$USB_SET") $(set_elements "$USB_SET6")"
 
-	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" '
+	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" -v flags="$flags" '
 		function is_priv(ip) {
 			if (ip ~ /^10\./) return 1
 			if (ip ~ /^192\.168\./) return 1
@@ -413,9 +413,9 @@ do_connections() {
 				if (dport == "" && $i ~ /^dport=/) { split($i, p, "="); dport = p[2] }
 			}
 			# 过滤 DNS 查询
-			if (dport == "53") next
+			if (flags ~ /nodns/ && dport == "53") next
 			# 过滤内网互访
-			if (is_priv(src) && is_priv(dst)) next
+			if (flags ~ /nolan/ && is_priv(src) && is_priv(dst)) next
 			out = "default"
 			if (mark == "256" || mark == "0x100") out = "wan"
 			else if (mark == "257" || mark == "0x101") out = "usb"
@@ -536,15 +536,111 @@ do_preset() {
 	esac
 }
 
+# ---------- URL 规则拉取 ----------
+_fetch_file() {
+	local url="$1" tmp="$2"
+	case "$url" in
+		http://*|https://*) ;;
+		*) return 1 ;;
+	esac
+	rm -f "$tmp"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -qO "$tmp" -T 20 "$url" >/dev/null 2>&1
+	elif command -v wget >/dev/null 2>&1; then
+		wget -qO "$tmp" -T 20 "$url" >/dev/null 2>&1
+	elif command -v curl >/dev/null 2>&1; then
+		curl -fsSL -m 20 -o "$tmp" "$url" >/dev/null 2>&1
+	else
+		return 2
+	fi
+	[ -s "$tmp" ] || return 3
+	local sz
+	sz=$(wc -c < "$tmp" 2>/dev/null)
+	[ "${sz:-0}" -gt 262144 ] && { rm -f "$tmp"; return 4; }
+	return 0
+}
+
+_parse_rules() {
+	awk '
+		{
+			line = $0
+			gsub(/\r/, "", line)
+			gsub(/^[ \t]+/, "", line)
+			gsub(/[ \t]+$/, "", line)
+			if (line == "") next
+			if (line ~ /^#/) next
+			if (line ~ /^!/) next
+			if (line ~ /^DOMAIN-SUFFIX,/) { split(line, a, ","); print "domain|" a[2]; next }
+			if (line ~ /^DOMAIN,/)        { split(line, a, ","); print "domain|" a[2]; next }
+			if (line ~ /^IP-CIDR6,/)      { split(line, a, ","); print "ip|" a[2]; next }
+			if (line ~ /^IP-CIDR,/)       { split(line, a, ","); print "ip|" a[2]; next }
+			if (line ~ /^domain[ \t]/)    { sub(/^domain[ \t]+/, "", line); print "domain|" line; next }
+			if (line ~ /^ip[ \t]/)        { sub(/^ip[ \t]+/, "", line); print "ip|" line; next }
+			if (line ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ || line ~ /:/) { print "ip|" line; next }
+			if (line ~ /\./) { print "domain|" line; next }
+		}
+	' "$1" | head -200
+}
+
+do_fetch() {
+	local url="$1" tmp="/tmp/wansel-fetch.$$"
+	if ! _fetch_file "$url" "$tmp"; then
+		echo '{"ok":false,"error":"下载失败，请检查 URL 或网络"}'
+		rm -f "$tmp"
+		return 1
+	fi
+	local count
+	count=$(_parse_rules "$tmp" | grep -c .)
+	if [ "$count" -eq 0 ]; then
+		rm -f "$tmp"
+		echo '{"ok":false,"error":"没有解析到规则"}'
+		return 1
+	fi
+	echo -n '{"ok":true,"count":'
+	echo -n "$count"
+	echo -n ',"items":['
+	local first=1 t v
+	_parse_rules "$tmp" > "/tmp/wansel-items.$$"
+	while IFS='|' read -r t v; do
+		[ -n "$v" ] || continue
+		[ "$first" = "1" ] || echo -n ','
+		first=0
+		printf '{"type":"%s","value":"%s"}' "$t" "$v"
+	done < "/tmp/wansel-items.$$"
+	echo -n ']}'
+	rm -f "$tmp" "/tmp/wansel-items.$$"
+}
+
+do_import_url() {
+	local url="$1" via="${2:-wan}" family="${3:-both}"
+	local tmp="/tmp/wansel-import.$$"
+	if ! _fetch_file "$url" "$tmp"; then
+		echo "下载失败，请检查 URL 或网络"
+		rm -f "$tmp"
+		return 1
+	fi
+	local n=0 t v
+	_parse_rules "$tmp" > "/tmp/wansel-items.$$"
+	while IFS='|' read -r t v; do
+		[ -n "$v" ] || continue
+		rule_add "$t" "$v" "$via" "$family" >/dev/null
+		n=$((n + 1))
+	done < "/tmp/wansel-items.$$"
+	rm -f "$tmp" "/tmp/wansel-items.$$"
+	echo "已从 URL 导入 $n 条规则 -> $via ($family)"
+}
+
 case "$1" in
 	list)        list_rules_json; echo ;;
 	add)         shift; rule_add "$@" ;;
 	del)         shift; rule_del "$@" ;;
 	apply)       shift; do_apply "$1" ;;
 	status)      do_status ;;
-	connections) shift; do_connections "${1:-all}" ;;
+	connections) shift; do_connections "${1:-all}" "$2" ;;
 	hook)        shift; do_hook "$1" ;;
 	preset)      shift; case "$1" in list) preset_list_json; echo ;; apply) shift; do_preset "$@" ;; *) echo "用法: wansel-egress preset list|apply <name> <via> [family]"; exit 1 ;; esac ;;
+	fetch)       shift; do_fetch "$1" ;;
+	import)      shift; do_import_url "$@" ;;
 	cleanup)     do_cleanup ;;
 	*) echo "用法: wansel-egress {list|add|del|apply|status|connections|hook|cleanup}"; exit 1 ;;
 esac
