@@ -160,19 +160,43 @@ rule_edit() {
 		*) newtype="domain" ;;
 	esac
 	[ -n "$newvalue" ] || newvalue="$oldval"
-	uci set "$CFG.$found.type=$newtype"
-	uci set "$CFG.$found.value=$newvalue"
-	uci set "$CFG.$found.via=$newvia"
-	uci set "$CFG.$found.family=$newfamily"
-	if [ -n "$newgroup" ]; then
-		uci set "$CFG.$found.group=$newgroup"
-	else
-		uci -q delete "$CFG.$found.group"
+
+	# 值没变：原地更新
+	if [ "$newvalue" = "$oldval" ]; then
+		uci set "$CFG.$found.type=$newtype"
+		uci set "$CFG.$found.value=$newvalue"
+		uci set "$CFG.$found.via=$newvia"
+		uci set "$CFG.$found.family=$newfamily"
+		if [ -n "$newgroup" ]; then
+			uci set "$CFG.$found.group=$newgroup"
+		else
+			uci -q delete "$CFG.$found.group"
+		fi
+		uci commit "$CFG"
+		echo "已保存: $newvalue -> $newvia ($newfamily)${newgroup:+ [$newgroup]}"
+		return 0
 	fi
-	# 值变了就重建 section 名，避免同 section 内重复
+
+	# 值变了：重建 section，避免旧名残留
+	local newsection
+	newsection="rule_$(echo "$newvalue" | tr -c 'a-zA-Z0-9' '_')"
+	if [ "$newsection" != "$found" ] && uci -q get "$CFG.$newsection" >/dev/null 2>&1; then
+		echo "规则已存在: $newvalue"
+		return 1
+	fi
+	uci set "$CFG.$newsection=rule"
+	uci set "$CFG.$newsection.type=$newtype"
+	uci set "$CFG.$newsection.value=$newvalue"
+	uci set "$CFG.$newsection.via=$newvia"
+	uci set "$CFG.$newsection.family=$newfamily"
+	if [ -n "$newgroup" ]; then
+		uci set "$CFG.$newsection.group=$newgroup"
+	fi
+	[ "$newsection" != "$found" ] && uci -q delete "$CFG.$found"
 	uci commit "$CFG"
 	echo "已保存: $newvalue -> $newvia ($newfamily)${newgroup:+ [$newgroup]}"
 }
+
 
 # 组列表: 返回 group -> via/family 汇总
 group_list_json() {

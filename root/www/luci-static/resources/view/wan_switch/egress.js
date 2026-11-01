@@ -590,20 +590,34 @@ return view.extend({
 		order.forEach(function(g) {
 			var items = groups[g];
 			if (g) {
-				// 组行
-				var gVia = items[0].via, gFam = items[0].family || 'both';
-				var viaSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:100px' }, [
+				// 组行：检测组内出口/协议是否一致
+				var vset = {}, fset = {};
+				items.forEach(function(r) {
+					vset[r.via || 'default'] = 1;
+					fset[r.family || 'both'] = 1;
+				});
+				var viaMixed = Object.keys(vset).length > 1;
+				var famMixed = Object.keys(fset).length > 1;
+				var gVia = items[0].via || 'default';
+				var gFam = items[0].family || 'both';
+
+				var viaOpts = [
 					E('option', { 'value': 'default' }, [ '跟随默认' ]),
 					E('option', { 'value': 'wan' }, [ '宽带' ]),
 					E('option', { 'value': 'usb' }, [ '5G' ])
-				]);
-				viaSel.value = gVia || 'default';
-				var famSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:120px' }, [
+				];
+				if (viaMixed) viaOpts.unshift(E('option', { 'value': '__mixed' }, [ '混合' ]));
+				var viaSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:100px' }, viaOpts);
+				viaSel.value = viaMixed ? '__mixed' : gVia;
+
+				var famOpts = [
 					E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
 					E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
 					E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
-				]);
-				famSel.value = gFam;
+				];
+				if (famMixed) famOpts.unshift(E('option', { 'value': '__mixed' }, [ '混合' ]));
+				var famSel = E('select', { 'class': 'wansel-input', 'style': 'min-width:120px' }, famOpts);
+				famSel.value = famMixed ? '__mixed' : gFam;
 
 				var childRows = [];
 				var foldIcon = E('span', {
@@ -707,7 +721,14 @@ return view.extend({
 	},
 
 	handleGroupSet: function(group, via, family) {
-		return fs.exec(EGRESS, [ 'group', 'set', group, via, family ]).then(function(r) {
+		var args = [ 'group', 'set', group ];
+		if (via && via !== '__mixed') args.push(via);
+		if (family && family !== '__mixed') args.push(family);
+		if (args.length === 2) {
+			ui.addNotification(null, E('p', {}, [ '请先在下拉框里选择具体的出口或协议' ]), 'warning');
+			return;
+		}
+		return fs.exec(EGRESS, args).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已更新').trim() ]), 'info');
 			return this.refreshRules();
 		}.bind(this)).catch(function(e) {
