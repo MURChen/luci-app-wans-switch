@@ -25,6 +25,7 @@
 - **5G 流量统计**：累计经路由器转发的流量，支持手动补录「本月已使用」、设置月额度、进度条变色、重置流量统计等
 - **配置导入导出**：导出为文本，导入时逐项校验
 - **物理拨动开关**（GL.iNet 固件）：开关拨到开 = 切到 5G，关 = 切回宽带；其他固件自动忽略
+- **策略出口**（按域名/IP 指定出口）：在第二页维护规则，可把指定域名或 IP 的流量固定走宽带或 5G，或「跟随默认」；实时显示每条连接实际走的出口
 - **深色主题适配**：已适配 LuCI 暗色主题
 
 ## 界面
@@ -78,6 +79,80 @@ netifd 原有的两条默认路由（例如Wan宽带 metric 1、USB共享 metric
 
 不清理回环（127.0.0.1）和 IPv6 出站（v6 路由未接管）。
 
+## 策略出口（按域名/IP 指定出口）
+
+第一页是「整个路由器切哪条线」，第二页是「某些流量单独走哪条线」，两者互不影响。
+
+### 原理
+
+```
+域名规则 → dnsmasq --nftset 收集解析出的真实 IP → nft set
+IP 规则  → 直接写入 nft set
+        ↓
+nft mangle PREROUTING 命中 set → 打标记（meta mark + ct mark）
+        ↓
+ip rule 按标记选独立路由表 → 固定从 eth0 或 usb0 出去
+```
+
+因为用的是**独立路由表**，所以第一页怎么切默认出口都不影响这里指定的流量。
+
+### 三个出口选项
+
+| 选项 | 行为 |
+|---|---|
+| 跟随默认 | 不处理，走 main 表（即第一页当前选的出口） |
+| 宽带 | 打 mark `0x100` → table 100 → `eth0` |
+| 5G | 打 mark `0x101` → table 101 → `usb0` |
+
+### 为什么域名规则需要重启 DNS
+
+dnsmasq 只在**处理 DNS 查询时**把解析结果写进 nft set。新增或修改域名规则后，必须让 dnsmasq 重新加载配置（`nftset=` 行写在 `/etc/dnsmasq.conf` 的标记块里），所以页面上有两个按钮：
+
+- **应用规则**：只更新 nft 集合和路由，不重启 DNS
+- **应用并重启 DNS**：新增/修改域名后必须点这个
+
+### CDN 换 IP 的应对
+
+域名解析出的 IP 会随 CDN 调度变化，而客户端又有 DNS 缓存，可能出现「规则里的 IP 不是客户端正在用的 IP」。为此 watchdog 每 10 分钟会对规则里的域名主动 `nslookup` 一次，强制刷新集合。
+
+如果某些服务换 IP 特别频繁，最稳的办法是直接加 **IP / CIDR 规则**（页面上选「IP / CIDR」类型）。
+
+### 规则何时会被清掉，以及怎么恢复
+
+OpenClash 每次重载防火墙都会重建 `inet fw4` 表，`nft set` 和 mark 规则会丢失。三层恢复机制：
+
+| 机制 | 触发时机 |
+|---|---|
+| 开机服务 `wansel-egress` | 开机时重建 ip rule / 路由表 / nft 规则 |
+| OpenClash hook（页面开关，默认开） | 防火墙重载后延迟 8 秒执行 `wansel-egress apply` |
+| watchdog（30 秒轮询） | 发现 set 或规则缺失就重建 |
+
+### 命令行
+
+```sh
+wansel-egress list                                  # 列出规则（JSON）
+wansel-egress add domain music.126.net wan          # 加域名规则
+wansel-egress add ip 36.150.226.0/24 usb            # 加 IP 段规则
+wansel-egress del music.126.net                     # 删规则
+wansel-egress apply                                 # 应用（不重启 DNS）
+wansel-egress apply dns                             # 应用并重启 DNS
+wansel-egress status                                # 状态（JSON）
+wansel-egress connections [all|wan|usb|default]     # 连接列表及出口判断
+wansel-egress hook on|off                           # OpenClash hook 开关
+wansel-egress cleanup                               # 清理所有策略出口规则
+```
+
+### 出口判断怎么看
+
+页面的流量列表里，每条连接的出口是这样判断的：
+
+1. `ct mark = 0x100` → 宽带
+2. `ct mark = 0x101` → 5G
+3. 目的 IP 在当前 nft set 里 → 对应出口（用于连接建立时 IP 还没进 set 的情况）
+4. 其余 → 跟随默认
+
+> 注：这条判断只反映**策略出口**，不反映 OpenClash 的代理分流。走代理的连接目的地址是代理节点，会显示为「跟随默认」。
+
 ## 配置项
 
 全部保存在 `/etc/wansel/settings`，也可在页面修改。
@@ -124,19 +199,30 @@ wansel set wan|usb <接口名>    # 手动指定接口（空=自动）
 ```
 root/
 ├── etc/init.d/wansel                          # procd 服务
+├── etc/init.d/wansel-switchd                  # 物理拨动开关监听
+├── etc/init.d/wansel-egress                   # 策略出口开机服务
+├── etc/init.d/wansel-egress-watchdog          # 策略出口守护
 ├── usr/lib/wansel/common.sh                   # 公共库：接口发现、路由、探测、统计
 ├── usr/sbin/wansel                            # CLI
 ├── usr/sbin/wansel-daemon                     # 守护进程
+├── usr/sbin/wansel-switchd                    # 物理开关监听
+├── usr/sbin/wansel-egress                     # 策略出口 CLI
+├── usr/sbin/wansel-egress-watchdog            # 策略出口守护脚本
 ├── usr/share/luci/menu.d/luci-app-wans-switch.json
 ├── usr/share/rpcd/acl.d/luci-app-wans-switch.json
-└── www/luci-static/resources/view/wan_switch/overview.js
+└── www/luci-static/resources/view/wan_switch/
+    ├── overview.js                            # 出口切换页
+    └── egress.js                              # 策略出口页
 ```
 
 运行时文件：
 
 - `/tmp/wansel/`：状态缓存、事件、探测结果（重启清空）
+- `/var/run/wansel-egress/`：策略出口应用时间戳
 - `/etc/wansel/settings`：持久设置
 - `/etc/wansel/traffic`：流量累计（重启保留）
+- `/etc/config/wansel_egress`：策略出口规则（UCI）
+- `/etc/dnsmasq.conf`：策略出口的 `nftset=` 行写在标记块内
 
 ## 接口识别规则
 
@@ -163,15 +249,30 @@ root/
 ```sh
 /etc/init.d/wansel stop
 /etc/init.d/wansel disable
-rm -f /usr/sbin/wansel /usr/sbin/wansel-daemon /etc/init.d/wansel
+/etc/init.d/wansel-switchd stop 2>/dev/null
+/etc/init.d/wansel-switchd disable 2>/dev/null
+/etc/init.d/wansel-egress stop 2>/dev/null
+/etc/init.d/wansel-egress disable 2>/dev/null
+/etc/init.d/wansel-egress-watchdog stop 2>/dev/null
+/etc/init.d/wansel-egress-watchdog disable 2>/dev/null
+/usr/sbin/wansel-egress hook off 2>/dev/null
+/usr/sbin/wansel-egress cleanup 2>/dev/null
+rm -f /usr/sbin/wansel /usr/sbin/wansel-daemon /usr/sbin/wansel-switchd
+rm -f /usr/sbin/wansel-egress /usr/sbin/wansel-egress-watchdog
+rm -f /etc/init.d/wansel /etc/init.d/wansel-switchd
+rm -f /etc/init.d/wansel-egress /etc/init.d/wansel-egress-watchdog
 rm -rf /usr/lib/wansel
 rm -f /usr/share/luci/menu.d/luci-app-wans-switch.json
 rm -f /usr/share/rpcd/acl.d/luci-app-wans-switch.json
 rm -f /www/luci-static/resources/view/wan_switch/overview.js
+rm -f /www/luci-static/resources/view/wan_switch/egress.js
 rm -rf /etc/wansel
+rm -f /etc/config/wansel_egress
 rm -f /tmp/luci-indexcache*
 /etc/init.d/rpcd reload
 ```
+
+> 卸载策略出口后，`/etc/dnsmasq.conf` 里可能残留标记块，可手动删除 `# >>> wansel-egress nftset >>>` 到 `# <<< wansel-egress nftset <<<` 之间的内容并重启 dnsmasq。
 
 ## 常见问题
 

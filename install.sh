@@ -16,11 +16,15 @@ fi
 echo "==> 复制文件"
 cp -r "$BASE/root/." /
 
-chmod 755 /usr/sbin/wansel /usr/sbin/wansel-daemon /usr/sbin/wansel-switchd /etc/init.d/wansel /etc/init.d/wansel-switchd
+chmod 755 /usr/sbin/wansel /usr/sbin/wansel-daemon /usr/sbin/wansel-switchd \
+	/usr/sbin/wansel-egress /usr/sbin/wansel-egress-watchdog \
+	/etc/init.d/wansel /etc/init.d/wansel-switchd \
+	/etc/init.d/wansel-egress /etc/init.d/wansel-egress-watchdog
 chmod 644 /usr/lib/wansel/common.sh
 chmod 644 /usr/share/luci/menu.d/luci-app-wans-switch.json
 chmod 644 /usr/share/rpcd/acl.d/luci-app-wans-switch.json
 chmod 644 /www/luci-static/resources/view/wan_switch/overview.js
+chmod 644 /www/luci-static/resources/view/wan_switch/egress.js
 
 echo "==> 启用服务"
 /etc/init.d/wansel enable
@@ -30,6 +34,12 @@ echo "==> 启用服务"
 /etc/init.d/wansel-switchd enable 2>/dev/null || true
 /etc/init.d/wansel-switchd restart 2>/dev/null || true
 
+# 策略出口：开机服务 + watchdog
+/etc/init.d/wansel-egress enable 2>/dev/null || true
+/etc/init.d/wansel-egress restart 2>/dev/null || true
+/etc/init.d/wansel-egress-watchdog enable 2>/dev/null || true
+/etc/init.d/wansel-egress-watchdog restart 2>/dev/null || true
+
 echo "==> 重载 rpcd 权限"
 /etc/init.d/rpcd reload
 
@@ -38,7 +48,7 @@ rm -f /tmp/luci-indexcache*
 
 echo
 if ! command -v conntrack >/dev/null 2>&1; then
-	echo "提示: 未安装 conntrack，'清理连接' 功能不可用。"
+	echo "提示: 未安装 conntrack，'清理连接' 和 '流量出口' 功能不可用。"
 	echo "      需要时执行: opkg update && opkg install conntrack"
 	echo
 fi

@@ -3,7 +3,8 @@
 		"description": "Grant access to the WAN switch CLI",
 		"read": {
 			"file": {
-				"/usr/sbin/wansel": [ "exec" ]
+				"/usr/sbin/wansel": [ "exec" ],
+				"/usr/sbin/wansel-egress": [ "exec" ]
 			},
 			"ubus": {
 				"network.interface.*": [ "dump", "status" ]
@@ -12,6 +13,7 @@
 		"write": {
 			"file": {
 				"/usr/sbin/wansel": [ "exec" ],
+				"/usr/sbin/wansel-egress": [ "exec" ],
 				"/tmp/wansel/import.txt": [ "write" ]
 			}
 		}

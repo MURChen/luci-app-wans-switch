@@ -1,0 +1,54 @@
+#!/bin/sh
+# wansel-egress-watchdog: 定期检查策略出口规则，缺失则重建；定期主动刷新域名解析
+
+INTERVAL="${1:-30}"
+RULES="/usr/sbin/wansel-egress"
+CFG="wansel_egress"
+DNS_REFRESH_EVERY=20   # 每 20 个周期（约 10 分钟）刷新一次域名解析
+
+[ -x "$RULES" ] || exit 0
+
+need_rebuild() {
+	nft list table inet fw4 >/dev/null 2>&1 || return 1
+	nft list set inet fw4 wansel_wan_v4 >/dev/null 2>&1 || return 0
+	nft list set inet fw4 wansel_usb_v4 >/dev/null 2>&1 || return 0
+	nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep -q "wansel-wan-mark" || return 0
+	if ip -4 route show default dev eth0 >/dev/null 2>&1; then
+		ip rule show 2>/dev/null | grep -q "fwmark 0x100 lookup 100" || return 0
+	fi
+	return 1
+}
+
+refresh_domains() {
+	. /lib/functions.sh 2>/dev/null
+	config_load "$CFG"
+	_refresh_one() {
+		local s="$1" type value via
+		config_get type "$s" "type" ""
+		config_get value "$s" "value" ""
+		config_get via "$s" "via" "default"
+		[ "$type" = "domain" ] || return 0
+		[ "$via" = "default" ] && return 0
+		# 强制走 dnsmasq 解析，触发 nftset 写入
+		nslookup -type=A "$value" 127.0.0.1 >/dev/null 2>&1
+		nslookup -type=A "www.$value" 127.0.0.1 >/dev/null 2>&1
+	}
+	config_foreach _refresh_one rule
+}
+
+logger -t wansel-egress-watchdog "started (interval=${INTERVAL}s)" 2>/dev/null
+
+tick=0
+while true; do
+	sleep "$INTERVAL"
+	tick=$((tick + 1))
+
+	if need_rebuild; then
+		logger -t wansel-egress-watchdog "rules missing, rebuilding" 2>/dev/null
+		"$RULES" apply >/dev/null 2>&1
+	fi
+
+	if [ $((tick % DNS_REFRESH_EVERY)) -eq 0 ]; then
+		refresh_domains
+	fi
+done

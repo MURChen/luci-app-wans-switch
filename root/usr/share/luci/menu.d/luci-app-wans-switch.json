@@ -3,8 +3,29 @@
 		"title": "出口切换",
 		"order": 25,
 		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-wans-switch" ]
+		}
+	},
+	"admin/network/wan-switch/overview": {
+		"title": "出口切换",
+		"order": 10,
+		"action": {
 			"type": "view",
 			"path": "wan_switch/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-wans-switch" ]
+		}
+	},
+	"admin/network/wan-switch/egress": {
+		"title": "策略出口",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "wan_switch/egress"
 		},
 		"depends": {
 			"acl": [ "luci-app-wans-switch" ]

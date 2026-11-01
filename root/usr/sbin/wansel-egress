@@ -1,0 +1,379 @@
+#!/bin/sh
+# wansel-egress - 按域名/IP 指定出口
+# 用法:
+#   wansel-egress list
+#   wansel-egress add <domain|ip> <value> <default|wan|usb>
+#   wansel-egress del <value>
+#   wansel-egress apply [dns]
+#   wansel-egress status
+#   wansel-egress connections [all|wan|usb|default]
+#   wansel-egress hook on|off
+#   wansel-egress cleanup
+
+. /lib/functions.sh 2>/dev/null
+
+CFG="wansel_egress"
+[ -f "/etc/config/$CFG" ] || : > "/etc/config/$CFG"
+STATE_DIR="/var/run/wansel-egress"
+DNSMASQ_CONF="/etc/dnsmasq.conf"
+DNS_MARK_BEGIN="# >>> wansel-egress nftset >>>"
+DNS_MARK_END="# <<< wansel-egress nftset <<<"
+
+WAN_SET="wansel_wan_v4"
+USB_SET="wansel_usb_v4"
+WAN_MARK="0x100"
+USB_MARK="0x101"
+WAN_TABLE="100"
+USB_TABLE="101"
+WAN_PREF="1000"
+USB_PREF="1010"
+
+log() { logger -t wansel-egress "$*" 2>/dev/null; }
+
+wan_gateway() {
+	ip -4 route show default dev eth0 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
+}
+
+usb_dev() {
+	local d
+	d=$(uci -q get network.tethering.device)
+	[ -n "$d" ] || d=$(uci -q get network.tethering.ifname)
+	[ -n "$d" ] || d="usb0"
+	echo "$d"
+}
+
+usb_gateway() {
+	local dev=$(usb_dev)
+	ip -4 route show default dev "$dev" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1)}' | head -n1
+}
+
+list_rules_json() {
+	local first=1
+	echo -n '{"rules":['
+	config_load "$CFG"
+	config_foreach _emit_rule rule
+	echo -n ']}'
+}
+
+_emit_rule() {
+	local section="$1" type value via
+	config_get type "$section" "type" ""
+	config_get value "$section" "value" ""
+	config_get via "$section" "via" "default"
+	[ -n "$value" ] || return 0
+	[ "$first" = "1" ] || echo -n ','
+	first=0
+	printf '{"id":"%s","type":"%s","value":"%s","via":"%s"}' "$section" "$type" "$value" "$via"
+}
+
+rule_add() {
+	local type="$1" value="$2" via="$3"
+	[ -n "$type" ] && [ -n "$value" ] || { echo "参数不足"; return 1; }
+	case "$via" in
+		default|wan|usb) ;;
+		*) echo "出口必须是 default/wan/usb"; return 1 ;;
+	esac
+	local dup_match=""
+	config_load "$CFG"
+	_dup_check() {
+		local s="$1" t v
+		config_get t "$s" "type" ""
+		config_get v "$s" "value" ""
+		[ "$t" = "$type" ] && [ "$v" = "$value" ] && dup_match="$s"
+	}
+	config_foreach _dup_check rule
+	if [ -n "$dup_match" ]; then
+		uci set "$CFG.$dup_match.via=$via"
+		uci commit "$CFG"
+		echo "已更新: $value -> $via"
+		return 0
+	fi
+	local section
+	section="rule_$(echo "$value" | tr -c 'a-zA-Z0-9' '_')"
+	uci set "$CFG.$section=rule"
+	uci set "$CFG.$section.type=$type"
+	uci set "$CFG.$section.value=$value"
+	uci set "$CFG.$section.via=$via"
+	uci commit "$CFG"
+	echo "已添加: $value -> $via"
+}
+
+rule_del() {
+	local target="$1" found=""
+	config_load "$CFG"
+	_del_check() {
+		local s="$1" v
+		config_get v "$s" "value" ""
+		[ "$v" = "$target" ] && found="$s"
+	}
+	config_foreach _del_check rule
+	if [ -z "$found" ]; then
+		echo "未找到规则: $target"
+		return 1
+	fi
+	uci -q delete "$CFG.$found"
+	uci commit "$CFG"
+	echo "已删除: $target"
+}
+
+need_fw4_table() { nft list table inet fw4 >/dev/null 2>&1; }
+
+ensure_set() {
+	nft list set inet fw4 "$1" >/dev/null 2>&1 || \
+		nft add set inet fw4 "$1" "{ type ipv4_addr; flags interval; }" 2>/dev/null
+}
+
+flush_set() { nft flush set inet fw4 "$1" 2>/dev/null; }
+add_set_element() { nft add element inet fw4 "$1" "{ $2 }" 2>/dev/null; }
+set_count() { nft list set inet fw4 "$1" 2>/dev/null | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | wc -l; }
+
+ensure_route_table() {
+	[ -n "$2" ] || return 1
+	ip route replace default via "$2" dev "$3" table "$1" 2>/dev/null
+}
+
+ensure_ip_rule() {
+	local mark="$1" table="$2" pref="$3"
+	ip rule show 2>/dev/null | grep -q "fwmark $mark lookup $table" && return 0
+	ip rule add fwmark "$mark" table "$table" pref "$pref" 2>/dev/null && return 0
+	local p=$((pref + 1))
+	while [ $p -lt $((pref + 20)) ]; do
+		ip rule add fwmark "$mark" table "$table" pref "$p" 2>/dev/null && return 0
+		p=$((p+1))
+	done
+	return 1
+}
+
+remove_ip_rule() {
+	local mark="$1" table="$2"
+	ip rule show 2>/dev/null | grep "fwmark $mark lookup $table" >/dev/null || return 0
+	local p=980
+	while [ $p -lt 1100 ]; do
+		ip rule del fwmark "$mark" table "$table" pref "$p" 2>/dev/null
+		p=$((p+1))
+	done
+	ip rule del fwmark "$mark" table "$table" 2>/dev/null
+}
+
+rebuild_mark_rules() {
+	if ! nft list chain inet fw4 mangle_prerouting >/dev/null 2>&1; then
+		nft add chain inet fw4 mangle_prerouting '{ type filter hook prerouting priority mangle; policy accept; }' 2>/dev/null
+	fi
+	nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | \
+		grep -E "wansel-(wan|usb)-mark" | \
+		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
+		while read -r h; do nft delete rule inet fw4 mangle_prerouting handle "$h" 2>/dev/null; done
+
+	ensure_set "$WAN_SET"
+	ensure_set "$USB_SET"
+	nft add rule inet fw4 mangle_prerouting ip daddr @$WAN_SET meta mark set $WAN_MARK ct mark set $WAN_MARK counter comment "wansel-wan-mark" 2>/dev/null
+	nft add rule inet fw4 mangle_prerouting ip daddr @$USB_SET meta mark set $USB_MARK ct mark set $USB_MARK counter comment "wansel-usb-mark" 2>/dev/null
+}
+
+rebuild_dnsmasq_nftset() {
+	local tmp="/tmp/wansel-egress.dns.$$"
+	awk -v b="$DNS_MARK_BEGIN" -v e="$DNS_MARK_END" '
+		$0 == b {skip=1; next}
+		$0 == e {skip=0; next}
+		!skip {print}
+	' "$DNSMASQ_CONF" > "$tmp" 2>/dev/null
+
+	{
+		echo "$DNS_MARK_BEGIN"
+		config_load "$CFG"
+		_gen_dns_line() {
+			local s="$1" type value via
+			config_get type "$s" "type" ""
+			config_get value "$s" "value" ""
+			config_get via "$s" "via" "default"
+			[ "$type" = "domain" ] || return 0
+			[ "$via" = "wan" ] && echo "nftset=/$value/4#inet#fw4#$WAN_SET"
+			[ "$via" = "usb" ] && echo "nftset=/$value/4#inet#fw4#$USB_SET"
+		}
+		config_foreach _gen_dns_line rule
+		echo "$DNS_MARK_END"
+	} >> "$tmp"
+
+	mv "$tmp" "$DNSMASQ_CONF"
+}
+
+apply_ip_rules() {
+	config_load "$CFG"
+	_apply_ip() {
+		local s="$1" type value via
+		config_get type "$s" "type" ""
+		config_get value "$s" "value" ""
+		config_get via "$s" "via" "default"
+		[ "$type" = "ip" ] || return 0
+		case "$via" in
+			wan) add_set_element "$WAN_SET" "$value" ;;
+			usb) add_set_element "$USB_SET" "$value" ;;
+		esac
+	}
+	config_foreach _apply_ip rule
+}
+
+do_apply() {
+	local with_dns="$1"
+	mkdir -p "$STATE_DIR"
+
+	need_fw4_table || { echo "fw4 表不存在，无法应用"; return 1; }
+
+	ensure_set "$WAN_SET"
+	ensure_set "$USB_SET"
+	flush_set "$WAN_SET"
+	flush_set "$USB_SET"
+
+	apply_ip_rules
+
+	local wgw ugw udev
+	wgw=$(wan_gateway)
+	udev=$(usb_dev)
+	ugw=$(usb_gateway)
+
+	if [ -n "$wgw" ]; then
+		ensure_route_table "$WAN_TABLE" "$wgw" eth0
+		ensure_ip_rule "$WAN_MARK" "$WAN_TABLE" "$WAN_PREF"
+	fi
+	if [ -n "$ugw" ]; then
+		ensure_route_table "$USB_TABLE" "$ugw" "$udev"
+		ensure_ip_rule "$USB_MARK" "$USB_TABLE" "$USB_PREF"
+	fi
+
+	rebuild_mark_rules
+	rebuild_dnsmasq_nftset
+
+	if [ "$with_dns" = "dns" ]; then
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1
+		sleep 2
+	fi
+
+	date +%s > "$STATE_DIR/applied"
+	echo "已应用规则"
+}
+
+do_status() {
+	local wcount ucount wcounter ucounter applied hook wan_up usb_up
+	wcount=$(set_count "$WAN_SET")
+	ucount=$(set_count "$USB_SET")
+	wcounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep "wansel-wan-mark" | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
+	ucounter=$(nft list chain inet fw4 mangle_prerouting 2>/dev/null | grep "wansel-usb-mark" | sed -n 's/.*counter packets \([0-9]*\) bytes \([0-9]*\).*/\1 \2/p')
+
+	applied="0"
+	[ -f "$STATE_DIR/applied" ] && applied=$(cat "$STATE_DIR/applied")
+
+	hook="1"
+	config_load "$CFG"
+	config_get hook global "openclash_hook" "1"
+
+	wan_up="false"
+	usb_up="false"
+	[ -n "$(wan_gateway)" ] && wan_up="true"
+	[ -n "$(usb_gateway)" ] && usb_up="true"
+
+	printf '{"applied":%s,"openclash_hook":%s,"wan_up":%s,"usb_up":%s,"wan_count":%s,"usb_count":%s,"wan_counter":"%s","usb_counter":"%s"}\n' \
+		"$applied" "$hook" "$wan_up" "$usb_up" "${wcount:-0}" "${ucount:-0}" "${wcounter:-0 0}" "${ucounter:-0 0}"
+}
+
+
+
+do_connections() {
+	local filter="$1"
+	local wan_ips usb_ips
+	wan_ips=$(nft list set inet fw4 "$WAN_SET" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | tr '\n' ' ')
+	usb_ips=$(nft list set inet fw4 "$USB_SET" 2>/dev/null | sed -n 's/.*elements = { *//p' | tr -d '}' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' | tr '\n' ' ')
+
+	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" '
+		/^(tcp|udp)/ {
+			mark="0"; bytes=0; src=""; dst=""; dport=""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^mark=/) { split($i, a, "="); mark = a[2] }
+				if ($i ~ /^bytes=/ && bytes == 0) { split($i, b, "="); bytes = b[2] }
+				if (src == "" && $i ~ /^src=/) { split($i, s, "="); src = s[2] }
+				if (dst == "" && $i ~ /^dst=/) { split($i, d, "="); dst = d[2] }
+				if (dport == "" && $i ~ /^dport=/) { split($i, p, "="); dport = p[2] }
+			}
+			out = "default"
+			if (mark == "256" || mark == "0x100") out = "wan"
+			else if (mark == "257" || mark == "0x101") out = "usb"
+			else if (wan_ips != "" && index(" " wan_ips " ", " " dst " ")) out = "wan"
+			else if (usb_ips != "" && index(" " usb_ips " ", " " dst " ")) out = "usb"
+			if (filter != "all" && filter != "" && out != filter) next
+			printf "%s|%s|%s|%s|%s|%s\n", $1, src, dst, dport, bytes, out
+		}
+	' | head -200
+}
+do_hook() {
+	local mode="$1"
+	local hook_script="/etc/openclash/custom/openclash_custom_firewall_rules.sh"
+	local marker="# wansel-egress hook"
+	case "$mode" in
+		on)
+			if [ ! -f "$hook_script" ]; then
+				echo "未找到 OpenClash hook 脚本"
+				return 1
+			fi
+			if ! grep -q "$marker" "$hook_script"; then
+				awk -v m="$marker" '
+					/^[[:space:]]*exit 0[[:space:]]*$/ && !done {
+						print ""
+						print m
+						print "(sleep 8; /usr/sbin/wansel-egress apply) &"
+						print "# /wansel-egress hook"
+						done = 1
+					}
+					{ print }
+				' "$hook_script" > "/tmp/och_on.$$" && mv "/tmp/och_on.$$" "$hook_script"
+				chmod +x "$hook_script"
+			fi
+			uci set "$CFG.global=egress"
+			uci set "$CFG.global.openclash_hook=1"
+			uci commit "$CFG"
+			echo "OpenClash hook 已启用"
+			;;
+		off)
+			if [ -f "$hook_script" ]; then
+				awk -v m="$marker" '
+					$0 == m {skip=1; next}
+					$0 == "# /wansel-egress hook" {skip=0; next}
+					!skip {print}
+				' "$hook_script" > "/tmp/och.$$" && mv "/tmp/och.$$" "$hook_script"
+				chmod +x "$hook_script"
+			fi
+			uci set "$CFG.global=egress"
+			uci set "$CFG.global.openclash_hook=0"
+			uci commit "$CFG"
+			echo "OpenClash hook 已禁用"
+			;;
+		*)
+			echo "用法: wansel-egress hook on|off"
+			return 1
+			;;
+	esac
+}
+
+do_cleanup() {
+	flush_set "$WAN_SET"
+	flush_set "$USB_SET"
+	remove_ip_rule "$WAN_MARK" "$WAN_TABLE"
+	remove_ip_rule "$USB_MARK" "$USB_TABLE"
+	nft -a list chain inet fw4 mangle_prerouting 2>/dev/null | \
+		grep -E "wansel-(wan|usb)-mark" | \
+		sed -n 's/.*# handle \([0-9]*\).*/\1/p' | \
+		while read -r h; do nft delete rule inet fw4 mangle_prerouting handle "$h" 2>/dev/null; done
+	ip route flush table "$WAN_TABLE" 2>/dev/null
+	ip route flush table "$USB_TABLE" 2>/dev/null
+	echo "已清理"
+}
+
+case "$1" in
+	list)        list_rules_json; echo ;;
+	add)         shift; rule_add "$@" ;;
+	del)         shift; rule_del "$@" ;;
+	apply)       shift; do_apply "$1" ;;
+	status)      do_status ;;
+	connections) shift; do_connections "${1:-all}" ;;
+	hook)        shift; do_hook "$1" ;;
+	cleanup)     do_cleanup ;;
+	*) echo "用法: wansel-egress {list|add|del|apply|status|connections|hook|cleanup}"; exit 1 ;;
+esac
