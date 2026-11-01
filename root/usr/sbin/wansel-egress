@@ -298,7 +298,8 @@ do_connections() {
 			else if (mark == "257" || mark == "0x101") out = "usb"
 			else if (wan_ips != "" && index(" " wan_ips " ", " " dst " ")) out = "wan"
 			else if (usb_ips != "" && index(" " usb_ips " ", " " dst " ")) out = "usb"
-			if (filter != "all" && filter != "" && out != filter) next
+			if (filter == "matched") { if (out == "default") next }
+			else if (filter != "all" && filter != "" && out != filter) next
 			printf "%s|%s|%s|%s|%s|%s\n", $1, src, dst, dport, bytes, out
 		}
 	' | head -200

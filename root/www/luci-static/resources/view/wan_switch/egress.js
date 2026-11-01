@@ -217,7 +217,8 @@ return view.extend({
 						E('option', { 'value': 'all' }, [ '全部连接' ]),
 						E('option', { 'value': 'wan' }, [ '只看宽带' ]),
 						E('option', { 'value': 'usb' }, [ '只看 5G' ]),
-						E('option', { 'value': 'default' }, [ '只看跟随默认' ])
+						E('option', { 'value': 'default' }, [ '只看跟随默认' ]),
+						E('option', { 'value': 'matched' }, [ '只看规则命中' ])
 					]),
 					E('span', { 'class': 'wansel-hint', 'id': 'ws-conn-count', 'style': 'margin-top:0' }, [ '' ])
 				]),
