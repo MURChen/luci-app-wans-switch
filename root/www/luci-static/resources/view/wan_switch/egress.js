@@ -322,11 +322,11 @@ return view.extend({
 
 		poll.add(function() {
 			return self.refreshStatus(root);
-		}, 5);
+		}, 10);
 
 		poll.add(function() {
 			return self.refreshConnections(root);
-		}, 10);
+		}, 20);
 
 		// DOM 还没挂载，延迟到下一轮再渲染规则树
 		setTimeout(function() {
