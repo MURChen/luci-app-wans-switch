@@ -462,6 +462,7 @@ do_apply() {
 		sleep 2
 	fi
 
+	build_ipmap >/dev/null 2>&1 || true
 	date +%s > "$STATE_DIR/applied"
 	echo "已应用规则"
 }
@@ -496,12 +497,43 @@ do_status() {
 }
 
 # ---------- connections ----------
+# ---------- IP -> 域名 映射（仅规则内域名） ----------
+IPMAP="$STATE_DIR/ipmap"
+
+build_ipmap() {
+	mkdir -p "$STATE_DIR"
+	local tmp="$IPMAP.tmp"
+	: > "$tmp"
+	config_load "$CFG"
+	_map_one() {
+		local s="$1" type value
+		config_get type "$s" "type" ""
+		config_get value "$s" "value" ""
+		[ "$type" = "domain" ] || return 0
+		[ -n "$value" ] || return 0
+		nslookup -type=A "$value" 127.0.0.1 2>/dev/null | \
+			sed -n 's/^Address: \([0-9][0-9.]*\)$/\1 '"$value"'/p' >> "$tmp"
+		nslookup -type=AAAA "$value" 127.0.0.1 2>/dev/null | \
+			sed -n 's/^Address: \([0-9a-fA-F:][0-9a-fA-F:]*\)$/\1 '"$value"'/p' >> "$tmp"
+	}
+	config_foreach _map_one rule
+	sort -u "$tmp" > "$IPMAP" 2>/dev/null
+	rm -f "$tmp"
+}
+
 do_connections() {
 	local filter="$1" flags="$2" wan_ips usb_ips
 	wan_ips="$(set_elements "$WAN_SET") $(set_elements "$WAN_SET6")"
 	usb_ips="$(set_elements "$USB_SET") $(set_elements "$USB_SET6")"
+	[ -f "$IPMAP" ] || build_ipmap >/dev/null 2>&1
 
-	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" -v flags="$flags" '
+	conntrack -L 2>/dev/null | awk -v filter="$filter" -v wan_ips="$wan_ips" -v usb_ips="$usb_ips" -v flags="$flags" -v ipmap="$IPMAP" '
+		BEGIN {
+			while ((getline line < ipmap) > 0) {
+				split(line, m, " ")
+				if (m[1] != "" && m[2] != "") dom[m[1]] = m[2]
+			}
+		}
 		function is_priv(ip) {
 			if (ip ~ /^10\./) return 1
 			if (ip ~ /^192\.168\./) return 1
@@ -521,9 +553,7 @@ do_connections() {
 				if (dst == "" && $i ~ /^dst=/) { split($i, d, "="); dst = d[2] }
 				if (dport == "" && $i ~ /^dport=/) { split($i, p, "="); dport = p[2] }
 			}
-			# 过滤 DNS 查询
 			if (flags ~ /nodns/ && dport == "53") next
-			# 过滤内网互访
 			if (flags ~ /nolan/ && is_priv(src) && is_priv(dst)) next
 			out = "default"
 			if (mark == "256" || mark == "0x100") out = "wan"
@@ -532,10 +562,12 @@ do_connections() {
 			else if (usb_ips != "" && index(" " usb_ips " ", " " dst " ")) out = "usb"
 			if (filter == "matched") { if (out == "default") next }
 			else if (filter != "all" && filter != "" && out != filter) next
-			printf "%s|%s|%s|%s|%s|%s\n", $1, src, dst, dport, bytes, out
+			dname = (dst in dom) ? dom[dst] : ""
+			printf "%s|%s|%s|%s|%s|%s|%s\n", $1, src, dst, dport, bytes, out, dname
 		}
 	' | head -200
 }
+
 
 # ---------- hook ----------
 do_hook() {
