@@ -24,7 +24,9 @@ var CSS = [
 '.wansel-table{width:100%;border-collapse:collapse;font-size:13px}',
 '.wansel-table th{text-align:left;font-weight:500;color:var(--text-color-medium,#777);padding:6px 8px;border-bottom:1px solid var(--border-color-low,#e6e6e6)}',
 '.wansel-table td{padding:8px;border-bottom:1px solid var(--border-color-low,#f0f0f0)}',
-'.wansel-mono{font-family:monospace}',
+'.wansel-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12.5px;letter-spacing:0}',
+'.wansel-note{color:#999;font-size:11px;margin-left:6px;font-family:inherit}',
+'.wansel-table-fixed{table-layout:fixed;width:100%}',
 
 '.wansel-via{padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}',
 '.wansel-via-default{background:rgba(130,130,130,.15);color:#888}',
@@ -196,7 +198,13 @@ return view.extend({
 
 			E('div', { 'class': 'wansel-panel' }, [
 				E('h3', {}, [ '规则列表' ]),
-				E('table', { 'class': 'wansel-table' }, [
+				E('table', { 'class': 'wansel-table wansel-table-fixed' }, [
+					E('colgroup', {}, [
+						E('col', { 'style': 'width:auto' }),
+						E('col', { 'style': 'width:110px' }),
+						E('col', { 'style': 'width:130px' }),
+						E('col', { 'style': 'width:170px' })
+					]),
 					E('thead', {}, [ E('tr', {}, [
 						E('th', {}, [ '规则' ]),
 						E('th', {}, [ '出口' ]),
@@ -614,7 +622,7 @@ return view.extend({
 						E('td', { 'style': 'padding-left:28px' }, [
 							E('span', { 'style': 'color:#888;margin-right:6px' }, [ '└' ]),
 							E('span', { 'class': 'wansel-mono' }, [ r.value ]),
-							E('span', { 'style': 'color:#999;font-size:11px;margin-left:6px' }, [ r.type === 'domain' ? '(域名)' : '(IP)' ])
+							E('span', { 'class': 'wansel-note' }, [ r.type === 'domain' ? '(域名)' : '(IP)' ])
 						]),
 						E('td', {}, [ badge(r.via) ]),
 						E('td', {}, [ famLabel[r.family] || 'IPv4+IPv6' ]),
