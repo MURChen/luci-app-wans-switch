@@ -127,19 +127,46 @@ OpenClash 每次重载防火墙都会重建 `inet fw4` 表，`nft set` 和 mark 
 | OpenClash hook（页面开关，默认开） | 防火墙重载后延迟 8 秒执行 `wansel-egress apply` |
 | watchdog（30 秒轮询） | 发现 set 或规则缺失就重建 |
 
+### IPv4 / IPv6
+
+策略出口同时支持两代协议，规则里的「协议」字段控制该域名收集哪一类地址：
+
+| 协议 | 行为 |
+|---|---|
+| IPv4+IPv6 | A 和 AAAA 都收集，两个集合各自打标记 |
+| 仅 IPv4 | 只把 A 记录写进 v4 集合，AAAA 不参与策略 |
+| 仅 IPv6 | 只把 AAAA 记录写进 v6 集合，A 不参与策略 |
+
+路由层是双份的：`ip rule` 和 `ip -6 rule` 各一套，路由表 100/101 同时放 IPv4 和 IPv6 默认路由。
+
+> **注意**：这里控制的是「哪些地址进入策略集合」，**不是**「让域名只解析某一代」。
+> dnsmasq 的按域名 `filter-AAAA` 在部分固件构建里没有编译进去（会报 `extraneous parameter`，导致 dnsmasq 无法启动），所以插件不写入该选项。
+> 如果需要让某个域名只解析 IPv4，建议在 LuCI 的「DHCP/DNS → 过滤 AAAA」里做全局设置，或者用 IP 规则直接锁定。
+
+### 流量列表的过滤
+
+列表默认会跳过两类噪音，让「规则有没有生效」一眼可见：
+
+- **DNS 查询**（目的端口 53）
+- **内网互访**（源和目的都是私有地址，含 `fe80::` 链路本地）
+
+想找某条具体连接时，可以用顶部的过滤器：全部 / 只看宽带 / 只看 5G / 只看跟随默认 / **只看规则命中**。
+
 ### 命令行
 
 ```sh
-wansel-egress list                                  # 列出规则（JSON）
-wansel-egress add domain music.126.net wan          # 加域名规则
-wansel-egress add ip 36.150.226.0/24 usb            # 加 IP 段规则
-wansel-egress del music.126.net                     # 删规则
-wansel-egress apply                                 # 应用（不重启 DNS）
-wansel-egress apply dns                             # 应用并重启 DNS
-wansel-egress status                                # 状态（JSON）
-wansel-egress connections [all|wan|usb|default]     # 连接列表及出口判断
-wansel-egress hook on|off                           # OpenClash hook 开关
-wansel-egress cleanup                               # 清理所有策略出口规则
+wansel-egress list                                            # 列出规则（JSON）
+wansel-egress add domain music.126.net wan ipv4               # 加域名规则（仅 IPv4）
+wansel-egress add domain example.com usb ipv6                 # 加域名规则（仅 IPv6）
+wansel-egress add ip 36.150.226.0/24 usb                      # 加 IPv4 段规则
+wansel-egress add ip 240e:979::/48 wan                        # 加 IPv6 段规则
+wansel-egress del music.126.net                               # 删规则
+wansel-egress apply                                           # 应用（不重启 DNS）
+wansel-egress apply dns                                       # 应用并重启 DNS
+wansel-egress status                                          # 状态（JSON，含 v4/v6 计数）
+wansel-egress connections [all|wan|usb|default|matched]       # 连接列表及出口判断
+wansel-egress hook on|off                                     # OpenClash hook 开关
+wansel-egress cleanup                                         # 清理所有策略出口规则
 ```
 
 ### 出口判断怎么看
