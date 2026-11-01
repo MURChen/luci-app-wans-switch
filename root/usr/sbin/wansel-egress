@@ -61,20 +61,21 @@ list_rules_json() {
 }
 
 _emit_rule() {
-	local section="$1" type value via family
+	local section="$1" type value via family group
 	config_get type "$section" "type" ""
 	config_get value "$section" "value" ""
 	config_get via "$section" "via" "default"
 	config_get family "$section" "family" "both"
+	config_get group "$section" "group" ""
 	[ -n "$value" ] || return 0
 	[ "$first" = "1" ] || echo -n ','
 	first=0
-	printf '{"id":"%s","type":"%s","value":"%s","via":"%s","family":"%s"}' \
-		"$section" "$type" "$value" "$via" "$family"
+	printf '{"id":"%s","type":"%s","value":"%s","via":"%s","family":"%s","group":"%s"}' \
+		"$section" "$type" "$value" "$via" "$family" "$group"
 }
 
 rule_add() {
-	local type="$1" value="$2" via="$3" family="${4:-both}"
+	local type="$1" value="$2" via="$3" family="${4:-both}" group="${5:-}"
 	[ -n "$type" ] && [ -n "$value" ] || { echo "参数不足"; return 1; }
 	case "$via" in
 		default|wan|usb) ;;
@@ -96,6 +97,7 @@ rule_add() {
 	if [ -n "$dup_match" ]; then
 		uci set "$CFG.$dup_match.via=$via"
 		uci set "$CFG.$dup_match.family=$family"
+		[ -n "$group" ] && uci set "$CFG.$dup_match.group=$group"
 		uci commit "$CFG"
 		echo "已更新: $value -> $via ($family)"
 		return 0
@@ -107,10 +109,117 @@ rule_add() {
 	uci set "$CFG.$section.value=$value"
 	uci set "$CFG.$section.via=$via"
 	uci set "$CFG.$section.family=$family"
+	[ -n "$group" ] && uci set "$CFG.$section.group=$group"
 	uci commit "$CFG"
-	echo "已添加: $value -> $via ($family)"
+	echo "已添加: $value -> $via ($family)${group:+ [$group]}"
 }
 
+# 编辑单条规则: 按原 value 定位
+rule_edit() {
+	local oldval="$1" newtype="$2" newvalue="$3" newvia="$4" newfamily="$5" newgroup="$6"
+	[ -n "$oldval" ] || { echo "缺少原值"; return 1; }
+	local found=""
+	config_load "$CFG"
+	_edit_check() {
+		local s="$1" v
+		config_get v "$s" "value" ""
+		[ "$v" = "$oldval" ] && found="$s"
+	}
+	config_foreach _edit_check rule
+	if [ -z "$found" ]; then
+		echo "未找到规则: $oldval"
+		return 1
+	fi
+	case "$newvia" in
+		default|wan|usb) ;;
+		*) newvia="default" ;;
+	esac
+	case "$newfamily" in
+		both|ipv4|ipv6) ;;
+		*) newfamily="both" ;;
+	esac
+	case "$newtype" in
+		domain|ip) ;;
+		*) newtype="domain" ;;
+	esac
+	[ -n "$newvalue" ] || newvalue="$oldval"
+	uci set "$CFG.$found.type=$newtype"
+	uci set "$CFG.$found.value=$newvalue"
+	uci set "$CFG.$found.via=$newvia"
+	uci set "$CFG.$found.family=$newfamily"
+	if [ -n "$newgroup" ]; then
+		uci set "$CFG.$found.group=$newgroup"
+	else
+		uci -q delete "$CFG.$found.group"
+	fi
+	# 值变了就重建 section 名，避免同 section 内重复
+	uci commit "$CFG"
+	echo "已保存: $newvalue -> $newvia ($newfamily)${newgroup:+ [$newgroup]}"
+}
+
+# 组列表: 返回 group -> via/family 汇总
+group_list_json() {
+	local first=1
+	echo -n '{"groups":['
+	config_load "$CFG"
+	_g_emit() {
+		local s="$1" group via family
+		config_get group "$s" "group" ""
+		config_get via "$s" "via" "default"
+		config_get family "$s" "family" "both"
+		[ -n "$group" ] || return 0
+		# 首次遇到某个组才输出
+		case " $seen " in *" $group "*) return 0 ;; esac
+		seen="$seen $group"
+		[ "$gfirst" = "1" ] || echo -n ','
+		gfirst=0
+		printf '{"name":"%s","via":"%s","family":"%s"}' "$group" "$via" "$family"
+	}
+	seen=""; gfirst=1
+	config_foreach _g_emit rule
+	echo -n ']}'
+}
+
+# 按组批量修改出口/协议
+group_set() {
+	local group="$1" via="$2" family="${3:-}"
+	[ -n "$group" ] || { echo "缺少组名"; return 1; }
+	case "$via" in
+		default|wan|usb) ;;
+		*) echo "出口必须是 default/wan/usb"; return 1 ;;
+	esac
+	local n=0
+	config_load "$CFG"
+	_gs_apply() {
+		local s="$1" g
+		config_get g "$s" "group" ""
+		[ "$g" = "$group" ] || return 0
+		uci set "$CFG.$s.via=$via"
+		[ -n "$family" ] && uci set "$CFG.$s.family=$family"
+		n=$((n + 1))
+	}
+	config_foreach _gs_apply rule
+	uci commit "$CFG"
+	echo "组 $group: 已更新 $n 条规则 -> $via${family:+ ($family)}"
+}
+
+# 重命名组
+group_rename() {
+	local oldg="$1" newg="$2"
+	[ -n "$oldg" ] && [ -n "$newg" ] || { echo "参数不足"; return 1; }
+	local n=0
+	config_load "$CFG"
+	_gr_apply() {
+		local s="$1" g
+		config_get g "$s" "group" ""
+		[ "$g" = "$oldg" ] || return 0
+		uci set "$CFG.$s.group=$newg"
+		n=$((n + 1))
+	}
+	config_foreach _gr_apply rule
+	uci commit "$CFG"
+	echo "已重命名: $oldg -> $newg ($n 条)"
+}
 rule_del() {
 	local target="$1" found=""
 	config_load "$CFG"
@@ -507,7 +616,7 @@ preset_list_json() {
 }
 
 do_preset() {
-	local name="$1" via="$2" family="${3:-both}"
+	local name="$1" via="$2" family="${3:-both}" group="${4:-}"
 	[ -n "$via" ] || via="wan"
 	case "$via" in
 		default|wan|usb) ;;
@@ -524,7 +633,7 @@ do_preset() {
 			for d in music.126.net music.163.com interface.music.163.com \
 				ipv4.music.163.com 163yun.com api.iplay.163.com \
 				music.163.com.163jiasu.com; do
-				rule_add domain "$d" "$via" "$family" >/dev/null
+				rule_add domain "$d" "$via" "$family" "$group" >/dev/null
 				added=$((added + 1))
 			done
 			echo "已填充网易云音乐规则: $added 条 -> $via ($family)"
@@ -612,7 +721,7 @@ do_fetch() {
 }
 
 do_import_url() {
-	local url="$1" via="${2:-wan}" family="${3:-both}"
+	local url="$1" via="${2:-wan}" family="${3:-both}" group="${4:-}"
 	local tmp="/tmp/wansel-import.$$"
 	if ! _fetch_file "$url" "$tmp"; then
 		echo "下载失败，请检查 URL 或网络"
@@ -623,7 +732,7 @@ do_import_url() {
 	_parse_rules "$tmp" > "/tmp/wansel-items.$$"
 	while IFS='|' read -r t v; do
 		[ -n "$v" ] || continue
-		rule_add "$t" "$v" "$via" "$family" >/dev/null
+		rule_add "$t" "$v" "$via" "$family" "$group" >/dev/null
 		n=$((n + 1))
 	done < "/tmp/wansel-items.$$"
 	rm -f "$tmp" "/tmp/wansel-items.$$"
@@ -638,6 +747,8 @@ case "$1" in
 	status)      do_status ;;
 	connections) shift; do_connections "${1:-all}" "$2" ;;
 	hook)        shift; do_hook "$1" ;;
+	edit)        shift; rule_edit "$@" ;;
+	group)       shift; case "$1" in list) group_list_json; echo ;; set) shift; group_set "$@" ;; rename) shift; group_rename "$@" ;; *) echo "用法: wansel-egress group list|set <group> <via> [family]|rename <old> <new>"; exit 1 ;; esac ;;
 	preset)      shift; case "$1" in list) preset_list_json; echo ;; apply) shift; do_preset "$@" ;; *) echo "用法: wansel-egress preset list|apply <name> <via> [family]"; exit 1 ;; esac ;;
 	fetch)       shift; do_fetch "$1" ;;
 	import)      shift; do_import_url "$@" ;;

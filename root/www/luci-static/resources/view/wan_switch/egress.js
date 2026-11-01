@@ -168,6 +168,7 @@ return view.extend({
 						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
 						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
 					]),
+					E('input', { 'class': 'wansel-input', 'id': 'ws-url-group', 'placeholder': '组名（可空）', 'style': 'flex:1;min-width:120px' }),
 					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handleFetch(); }) }, [ '预览' ]),
 					E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(this, function() { return self.handleImportUrl(); }) }, [ '导入' ])
 				]),
@@ -185,6 +186,7 @@ return view.extend({
 						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
 						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
 					]),
+					E('input', { 'class': 'wansel-input', 'id': 'ws-preset-group', 'placeholder': '组名（可空）', 'style': 'flex:1;min-width:120px' }),
 					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handlePreset(); }) }, [ '填充预设' ])
 				]),
 				E('div', { 'class': 'wansel-hint' }, [
@@ -200,11 +202,12 @@ return view.extend({
 						E('th', {}, [ '值' ]),
 						E('th', {}, [ '出口' ]),
 						E('th', {}, [ '协议' ]),
+						E('th', {}, [ '组' ]),
 						E('th', {}, [ '' ])
 					])]),
 					E('tbody', { 'id': 'ws-rule-body' },
 						rules.length ? rules.map(function(r) { return self.renderRuleRow(r); }) :
-							[ E('tr', {}, [ E('td', { 'colspan': '5', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]) ])
+							[ E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]) ])
 				]),
 				E('div', { 'class': 'wansel-form', 'style': 'margin-top:14px' }, [
 					E('select', { 'class': 'wansel-input', 'id': 'ws-type' }, [
@@ -233,6 +236,24 @@ return view.extend({
 				]),
 				E('div', { 'class': 'wansel-hint' }, [
 					'「应用规则」只更新 nft 集合和路由，不重启 DNS；新加的域名要等「应用并重启 DNS」后才会开始解析收集。'
+				])
+			]),
+
+			E('div', { 'class': 'wansel-panel' }, [
+				E('h3', {}, [ '规则组' ]),
+				E('table', { 'class': 'wansel-table' }, [
+					E('thead', {}, [ E('tr', {}, [
+						E('th', {}, [ '组名' ]),
+						E('th', {}, [ '出口' ]),
+						E('th', {}, [ '协议' ]),
+						E('th', {}, [ '' ])
+					])]),
+					E('tbody', { 'id': 'ws-group-body' }, [
+						E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有分组' ]) ])
+					])
+				]),
+				E('div', { 'class': 'wansel-hint' }, [
+					'在规则里填了「组」之后，这里可以按组批量切换出口和协议。'
 				])
 			]),
 
@@ -311,6 +332,7 @@ return view.extend({
 		}, 10);
 
 		this.refreshConnections(root);
+		this.refreshGroups(rules);
 
 		return root;
 	},
@@ -323,10 +345,71 @@ return view.extend({
 			E('td', { 'class': 'wansel-mono' }, [ r.value ]),
 			E('td', {}, [ badge(r.via) ]),
 			E('td', {}, [ famLabel[r.family] || 'IPv4+IPv6' ]),
-			E('td', {}, [
+			E('td', {}, [ r.group || '—' ]),
+			E('td', { 'style': 'white-space:nowrap' }, [
+				E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, function() { return self.handleEdit(r); }) }, [ '编辑' ]),
+				' ',
 				E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(this, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 			])
 		]);
+	},
+
+	handleEdit: function(r) {
+		var self = this;
+		var typeSel = E('select', { 'class': 'wansel-input' }, [
+			E('option', { 'value': 'domain' }, [ '域名' ]),
+			E('option', { 'value': 'ip' }, [ 'IP / CIDR' ])
+		]);
+		typeSel.value = r.type || 'domain';
+
+		var valIn = E('input', { 'class': 'wansel-input', 'value': r.value });
+		var viaSel = E('select', { 'class': 'wansel-input' }, [
+			E('option', { 'value': 'default' }, [ '跟随默认' ]),
+			E('option', { 'value': 'wan' }, [ '宽带' ]),
+			E('option', { 'value': 'usb' }, [ '5G' ])
+		]);
+		viaSel.value = r.via || 'default';
+
+		var famSel = E('select', { 'class': 'wansel-input' }, [
+			E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+			E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+			E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+		]);
+		famSel.value = r.family || 'both';
+
+		var grpIn = E('input', { 'class': 'wansel-input', 'value': r.group || '', 'placeholder': '留空表示不分组' });
+
+		ui.showModal('编辑规则', [
+			E('div', { 'class': 'wansel-form', 'style': 'flex-direction:column;align-items:stretch;gap:10px' }, [
+				E('label', {}, [ '类型' ]), typeSel,
+				E('label', {}, [ '值' ]), valIn,
+				E('label', {}, [ '出口' ]), viaSel,
+				E('label', {}, [ '协议' ]), famSel,
+				E('label', {}, [ '组' ]), grpIn
+			]),
+			E('div', { 'class': 'right', 'style': 'margin-top:14px' }, [
+				E('button', { 'class': 'btn', 'click': ui.hideModal }, [ '取消' ]),
+				' ',
+				E('button', { 'class': 'btn cbi-button cbi-button-save', 'click': ui.createHandlerFn(this, function() {
+					ui.hideModal();
+					return self.handleEditSave(r.value, typeSel.value, valIn.value.trim(), viaSel.value, famSel.value, grpIn.value.trim());
+				}) }, [ '保存' ])
+			])
+		]);
+	},
+
+	handleEditSave: function(oldValue, type, value, via, family, group) {
+		if (!value) {
+			ui.addNotification(null, E('p', {}, [ '值不能为空' ]), 'warning');
+			return;
+		}
+		var args = [ 'edit', oldValue, type, value, via, family, group ];
+		return fs.exec(EGRESS, args).then(function(r) {
+			ui.addNotification(null, E('p', {}, [ (r.stdout || '已保存').trim() ]), 'info');
+			return this.refreshRules();
+		}.bind(this)).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [ '保存失败: ' + e ]), 'danger');
+		});
 	},
 
 	handleFetch: function() {
@@ -377,6 +460,8 @@ return view.extend({
 		var url = (document.getElementById('ws-url').value || '').trim();
 		var via = document.getElementById('ws-url-via').value;
 		var family = document.getElementById('ws-url-family').value;
+		var grpEl2 = document.getElementById('ws-url-group');
+		var group2 = grpEl2 ? grpEl2.value.trim() : '';
 
 		if (!url) {
 			ui.addNotification(null, E('p', {}, [ '请输入规则文件 URL' ]), 'warning');
@@ -389,7 +474,7 @@ return view.extend({
 			E('p', { 'class': 'spinning' }, [ '正在导入…' ])
 		]);
 
-		return fs.exec(EGRESS, [ 'import', url, via, family ]).then(function(r) {
+		return fs.exec(EGRESS, [ 'import', url, via, family, group2 ]).then(function(r) {
 			ui.hideModal();
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已导入').trim() ]), 'info');
 			return this.refreshRules();
@@ -403,8 +488,10 @@ return view.extend({
 		var preset = document.getElementById('ws-preset').value;
 		var via = document.getElementById('ws-preset-via').value;
 		var family = document.getElementById('ws-preset-family').value;
+		var grpEl = document.getElementById('ws-preset-group');
+		var group = grpEl ? grpEl.value.trim() : '';
 
-		return fs.exec(EGRESS, [ 'preset', 'apply', preset, via, family ]).then(function(r) {
+		return fs.exec(EGRESS, [ 'preset', 'apply', preset, via, family, group ]).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已填充').trim() ]), 'info');
 			return this.refreshRules();
 		}.bind(this)).catch(function(e) {
@@ -472,12 +559,70 @@ return view.extend({
 			while (body.firstChild) body.removeChild(body.firstChild);
 			var rules = d.rules || [];
 			if (!rules.length) {
-				body.appendChild(E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]));
-				return;
+				body.appendChild(E('tr', {}, [ E('td', { 'colspan': '6', 'class': 'wansel-empty' }, [ '还没有规则' ]) ]));
+			} else {
+				for (var i = 0; i < rules.length; i++)
+					body.appendChild(this.renderRuleRow(rules[i]));
 			}
-			for (var i = 0; i < rules.length; i++)
-				body.appendChild(this.renderRuleRow(rules[i]));
+			return this.refreshGroups(rules);
 		}.bind(this));
+	},
+
+	refreshGroups: function(rules) {
+		var body = document.getElementById('ws-group-body');
+		if (!body) return;
+
+		// 从规则里汇总分组
+		var map = {};
+		(rules || []).forEach(function(r) {
+			if (!r.group) return;
+			if (!map[r.group]) map[r.group] = { name: r.group, via: r.via, family: r.family, count: 0 };
+			map[r.group].count++;
+		});
+		var groups = Object.keys(map).map(function(k) { return map[k]; });
+
+		while (body.firstChild) body.removeChild(body.firstChild);
+		if (!groups.length) {
+			body.appendChild(E('tr', {}, [ E('td', { 'colspan': '4', 'class': 'wansel-empty' }, [ '还没有分组' ]) ]));
+			return;
+		}
+
+		var self = this;
+		groups.forEach(function(g) {
+			var viaSel = E('select', { 'class': 'wansel-input' }, [
+				E('option', { 'value': 'default' }, [ '跟随默认' ]),
+				E('option', { 'value': 'wan' }, [ '宽带' ]),
+				E('option', { 'value': 'usb' }, [ '5G' ])
+			]);
+			viaSel.value = g.via || 'default';
+
+			var famSel = E('select', { 'class': 'wansel-input' }, [
+				E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+				E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+				E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+			]);
+			famSel.value = g.family || 'both';
+
+			body.appendChild(E('tr', {}, [
+				E('td', {}, [ g.name + '（' + g.count + ' 条）' ]),
+				E('td', {}, [ viaSel ]),
+				E('td', {}, [ famSel ]),
+				E('td', {}, [
+					E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(self, function() {
+						return self.handleGroupSet(g.name, viaSel.value, famSel.value);
+					}) }, [ '应用到组' ])
+				])
+			]));
+		});
+	},
+
+	handleGroupSet: function(group, via, family) {
+		return fs.exec(EGRESS, [ 'group', 'set', group, via, family ]).then(function(r) {
+			ui.addNotification(null, E('p', {}, [ (r.stdout || '已更新').trim() ]), 'info');
+			return this.refreshRules();
+		}.bind(this)).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [ '失败: ' + e ]), 'danger');
+		});
 	},
 
 	refreshStatus: function(root) {
