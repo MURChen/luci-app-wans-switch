@@ -284,7 +284,9 @@ return view.extend({
 						E('input', { 'type': 'checkbox', 'id': 'ws-hide-lan', 'checked': true, 'change': ui.createHandlerFn(this, function() { return self.refreshConnections(); }) }),
 						'排除内网'
 					]),
-					E('span', { 'class': 'wansel-hint', 'id': 'ws-conn-count', 'style': 'margin-top:0' }, [ '' ])
+					E('span', { 'class': 'wansel-hint', 'id': 'ws-conn-count', 'style': 'margin-top:0' }, [ '' ]),
+					E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, function() { return self.refreshConnections(); }) }, [ '刷新' ]),
+					E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(this, function() { return self.handleFlushStale(); }) }, [ '清理旧连接' ])
 				]),
 				E('table', { 'class': 'wansel-table', 'style': 'margin-top:10px' }, [
 					E('thead', {}, [ E('tr', {}, [
@@ -677,6 +679,17 @@ return view.extend({
 					body.appendChild(row);
 				});
 			}
+		});
+	},
+
+	handleFlushStale: function() {
+		if (!confirm('清理所有非 ESTABLISHED 状态的旧连接（TIME_WAIT 等）？'))
+			return;
+		return fs.exec(EGRESS, [ 'flush', 'stale' ]).then(function(r) {
+			ui.addNotification(null, E('p', {}, [ (r.stdout || '已清理').trim() ]), 'info');
+			return this.refreshConnections();
+		}.bind(this)).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [ '清理失败: ' + e ]), 'danger');
 		});
 	},
 

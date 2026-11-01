@@ -588,6 +588,30 @@ do_hook() {
 }
 
 # ---------- cleanup ----------
+# 清理旧连接（非 ESTABLISHED 状态）
+do_flush_stale() {
+	local mode="${1:-stale}"
+	local n=0
+	if ! command -v conntrack >/dev/null 2>&1; then
+		echo "未安装 conntrack"
+		return 1
+	fi
+	if [ "$mode" = "all" ]; then
+		n=$(conntrack -L 2>/dev/null | grep -c .)
+		conntrack -F >/dev/null 2>&1
+		echo "已清空全部连接跟踪（$n 条）"
+		return 0
+	fi
+	local st
+	for st in TIME_WAIT CLOSE CLOSE_WAIT FIN_WAIT LAST_ACK SYN_SENT; do
+		local c
+		c=$(conntrack -L -p tcp --state "$st" 2>/dev/null | grep -c .)
+		[ "${c:-0}" -gt 0 ] && conntrack -D -p tcp --state "$st" >/dev/null 2>&1
+		n=$((n + ${c:-0}))
+	done
+	echo "已清理旧连接 $n 条（TIME_WAIT / CLOSE / CLOSE_WAIT / FIN_WAIT / LAST_ACK / SYN_SENT）"
+}
+
 do_cleanup() {
 	flush_set "$WAN_SET"
 	flush_set "$USB_SET"
@@ -752,6 +776,7 @@ case "$1" in
 	preset)      shift; case "$1" in list) preset_list_json; echo ;; apply) shift; do_preset "$@" ;; *) echo "用法: wansel-egress preset list|apply <name> <via> [family]"; exit 1 ;; esac ;;
 	fetch)       shift; do_fetch "$1" ;;
 	import)      shift; do_import_url "$@" ;;
+	flush)       shift; do_flush_stale "$1" ;;
 	cleanup)     do_cleanup ;;
 	*) echo "用法: wansel-egress {list|add|del|apply|status|connections|hook|cleanup}"; exit 1 ;;
 esac
