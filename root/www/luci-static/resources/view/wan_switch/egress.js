@@ -231,6 +231,7 @@ return view.extend({
 						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
 						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
 					]),
+					E('input', { 'class': 'wansel-input', 'id': 'ws-group', 'placeholder': '组名（可空，新组名会自动建组）', 'style': 'flex:1;min-width:150px' }),
 					E('button', { 'class': 'btn cbi-button cbi-button-add', 'click': ui.createHandlerFn(this, function() { return self.handleAdd(); }) }, [ '添加' ])
 				]),
 				E('div', { 'class': 'wansel-hint' }, [
@@ -498,17 +499,23 @@ return view.extend({
 		var via = document.getElementById('ws-via').value;
 		var famEl = document.getElementById('ws-family');
 		var family = famEl ? famEl.value : 'both';
+		var grpEl = document.getElementById('ws-group');
+		var group = grpEl ? grpEl.value.trim() : '';
 
 		if (!value) {
 			ui.addNotification(null, E('p', {}, [ '请输入域名或 IP' ]), 'warning');
 			return;
 		}
 
-		var args = [ 'add', type, value, via, family ];
+		var args = [ 'add', type, value, via, family, group ];
 		return fs.exec(EGRESS, args).then(function(r) {
 			ui.addNotification(null, E('p', {}, [ (r.stdout || '已添加').trim() ]), 'info');
+			var v = document.getElementById('ws-value');
+			if (v) v.value = '';
 			return this.refreshRules();
-		}.bind(this));
+		}.bind(this)).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [ '添加失败: ' + e ]), 'danger');
+		});
 	},
 
 	handleDel: function(value) {
