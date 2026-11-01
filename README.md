@@ -143,14 +143,48 @@ OpenClash 每次重载防火墙都会重建 `inet fw4` 表，`nft set` 和 mark 
 > dnsmasq 的按域名 `filter-AAAA` 在部分固件构建里没有编译进去（会报 `extraneous parameter`，导致 dnsmasq 无法启动），所以插件不写入该选项。
 > 如果需要让某个域名只解析 IPv4，建议在 LuCI 的「DHCP/DNS → 过滤 AAAA」里做全局设置，或者用 IP 规则直接锁定。
 
+### 从 URL 拉取规则
+
+页面上的「从url拉取规则」支持两种来源：
+
+**内置预设**：选「内置：网易云音乐」，一键填入 7 条域名。
+
+**远程规则文件**：填一个 http/https 地址，点「预览」先看解析结果，确认后点「导入」。
+
+规则文件格式（每行一条，`#` 开头为注释）：
+
+```
+# 网易云音乐
+domain music.126.net
+domain music.163.com
+ip 59.111.128.0/17
+```
+
+解析器兼容这些写法：
+
+| 写法 | 识别 |
+|---|---|
+| `domain xxx` / `ip xxx` | 显式声明 |
+| `DOMAIN-SUFFIX,xxx` / `DOMAIN,xxx` | Clash 格式 |
+| `IP-CIDR,xxx` / `IP-CIDR6,xxx` | Clash 格式 |
+| 纯域名 / 纯 IP | 自动判断 |
+
+限制：单文件 256 KB、最多 200 条、仅支持 http/https。
+
 ### 流量列表的过滤
 
-列表默认会跳过两类噪音，让「规则有没有生效」一眼可见：
+列表默认跳过两类噪音，两个都可以在页面顶部取消勾选：
 
-- **DNS 查询**（目的端口 53）
-- **内网互访**（源和目的都是私有地址，含 `fe80::` 链路本地）
+- **排除 DNS**：目的端口 53
+- **排除内网**：源和目的都是私有地址（含 `fe80::` 链路本地）
 
-想找某条具体连接时，可以用顶部的过滤器：全部 / 只看宽带 / 只看 5G / 只看跟随默认 / **只看规则命中**。
+对应的命令行参数：
+
+```sh
+wansel-egress connections all                   # 不过滤
+wansel-egress connections all 'nodns'           # 只排除 DNS
+wansel-egress connections all 'nodns,nolan'     # 排除 DNS + 内网
+```
 
 ### 命令行
 
@@ -164,10 +198,25 @@ wansel-egress del music.126.net                               # 删规则
 wansel-egress apply                                           # 应用（不重启 DNS）
 wansel-egress apply dns                                       # 应用并重启 DNS
 wansel-egress status                                          # 状态（JSON，含 v4/v6 计数）
-wansel-egress connections [all|wan|usb|default|matched]       # 连接列表及出口判断
+wansel-egress connections [all|wan|usb|default|matched] [nodns,nolan]  # 连接列表
+wansel-egress preset list                                     # 列出内置预设
+wansel-egress preset apply netease wan both                   # 应用内置预设
+wansel-egress fetch <url>                                     # 下载并预览规则（JSON）
+wansel-egress import <url> wan both                           # 下载并导入规则
 wansel-egress hook on|off                                     # OpenClash hook 开关
 wansel-egress cleanup                                         # 清理所有策略出口规则
 ```
+
+### 规则文件格式
+
+```
+# 注释行
+domain music.126.net
+domain music.163.com
+ip 59.111.128.0/17
+```
+
+也兼容纯域名/纯 IP 和 Clash 写法（`DOMAIN-SUFFIX,`、`IP-CIDR,`）。
 
 ### 出口判断怎么看
 
