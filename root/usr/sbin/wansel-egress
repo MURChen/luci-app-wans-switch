@@ -499,6 +499,43 @@ do_cleanup() {
 	echo "已清理"
 }
 
+# ---------- 内置预设 ----------
+preset_list_json() {
+	echo -n '{"presets":['
+	echo -n '{"id":"netease","name":"网易云音乐","count":7}'
+	echo -n ']}'
+}
+
+do_preset() {
+	local name="$1" via="$2" family="${3:-both}"
+	[ -n "$via" ] || via="wan"
+	case "$via" in
+		default|wan|usb) ;;
+		*) via="wan" ;;
+	esac
+	case "$family" in
+		both|ipv4|ipv6) ;;
+		*) family="both" ;;
+	esac
+
+	local added=0
+	case "$name" in
+		netease)
+			for d in music.126.net music.163.com interface.music.163.com \
+				ipv4.music.163.com 163yun.com api.iplay.163.com \
+				music.163.com.163jiasu.com; do
+				rule_add domain "$d" "$via" "$family" >/dev/null
+				added=$((added + 1))
+			done
+			echo "已填充网易云音乐规则: $added 条 -> $via ($family)"
+			;;
+		*)
+			echo "未知预设: $name"
+			return 1
+			;;
+	esac
+}
+
 case "$1" in
 	list)        list_rules_json; echo ;;
 	add)         shift; rule_add "$@" ;;
@@ -507,6 +544,7 @@ case "$1" in
 	status)      do_status ;;
 	connections) shift; do_connections "${1:-all}" ;;
 	hook)        shift; do_hook "$1" ;;
+	preset)      shift; case "$1" in list) preset_list_json; echo ;; apply) shift; do_preset "$@" ;; *) echo "用法: wansel-egress preset list|apply <name> <via> [family]"; exit 1 ;; esac ;;
 	cleanup)     do_cleanup ;;
 	*) echo "用法: wansel-egress {list|add|del|apply|status|connections|hook|cleanup}"; exit 1 ;;
 esac

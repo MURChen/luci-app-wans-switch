@@ -155,6 +155,29 @@ return view.extend({
 			]),
 
 			E('div', { 'class': 'wansel-panel' }, [
+				E('h3', {}, [ '快速填充' ]),
+				E('div', { 'class': 'wansel-form' }, [
+					E('select', { 'class': 'wansel-input', 'id': 'ws-preset', 'style': 'flex:1;min-width:160px' }, [
+						E('option', { 'value': 'netease' }, [ '网易云音乐' ])
+					]),
+					E('select', { 'class': 'wansel-input', 'id': 'ws-preset-via', 'style': 'flex:1;min-width:110px' }, [
+						E('option', { 'value': 'wan' }, [ '宽带' ]),
+						E('option', { 'value': 'usb' }, [ '5G' ]),
+						E('option', { 'value': 'default' }, [ '跟随默认' ])
+					]),
+					E('select', { 'class': 'wansel-input', 'id': 'ws-preset-family', 'style': 'flex:1;min-width:130px' }, [
+						E('option', { 'value': 'both' }, [ 'IPv4+IPv6' ]),
+						E('option', { 'value': 'ipv4' }, [ '仅 IPv4' ]),
+						E('option', { 'value': 'ipv6' }, [ '仅 IPv6' ])
+					]),
+					E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() { return self.handlePreset(); }) }, [ '一键填充' ])
+				]),
+				E('div', { 'class': 'wansel-hint' }, [
+					'填充后只是写入规则，还需要点下面的「应用并重启 DNS」才会生效。'
+				])
+			]),
+
+			E('div', { 'class': 'wansel-panel' }, [
 				E('h3', {}, [ '规则列表' ]),
 				E('table', { 'class': 'wansel-table' }, [
 					E('thead', {}, [ E('tr', {}, [
@@ -281,6 +304,19 @@ return view.extend({
 				E('button', { 'class': 'btn cbi-button cbi-button-remove', 'click': ui.createHandlerFn(this, function() { return self.handleDel(r.value); }) }, [ '删除' ])
 			])
 		]);
+	},
+
+	handlePreset: function() {
+		var preset = document.getElementById('ws-preset').value;
+		var via = document.getElementById('ws-preset-via').value;
+		var family = document.getElementById('ws-preset-family').value;
+
+		return fs.exec(EGRESS, [ 'preset', 'apply', preset, via, family ]).then(function(r) {
+			ui.addNotification(null, E('p', {}, [ (r.stdout || '已填充').trim() ]), 'info');
+			return this.refreshRules();
+		}.bind(this)).catch(function(e) {
+			ui.addNotification(null, E('p', {}, [ '填充失败: ' + e ]), 'danger');
+		});
 	},
 
 	handleAdd: function() {
