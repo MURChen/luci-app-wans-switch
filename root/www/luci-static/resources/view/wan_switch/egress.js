@@ -319,8 +319,11 @@ return view.extend({
 			return self.refreshConnections(root);
 		}, 10);
 
-		this.renderRuleTree(rules);
-		this.refreshConnections(root);
+		// DOM 还没挂载，延迟到下一轮再渲染规则树
+		setTimeout(function() {
+			self.renderRuleTree(rules);
+			self.refreshConnections(root);
+		}, 0);
 
 		return root;
 	},
